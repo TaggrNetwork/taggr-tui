@@ -9,7 +9,7 @@ built-in help, `src/guide.txt` (`taggr-tui --help`); keep it consistent with beh
 `../mailbox` and `../organiser` with the same look and conventions. One binary, a ratatui TUI.
 It talks to the Taggr canister on the Internet Computer through `ic-agent` and aims to cover
 everything the web app (`../taggr/src/frontend/src`) does, except Internet Identity sign-in,
-cold wallet linking (Plug) and the web app's appearance settings.
+cold wallet linking (Plug), the Ethereum bridge, recovery and the web app's appearance settings.
 
 Sign-in is by seed phrase only, derived exactly like the web app's "Seed Phrase" method
 (`identity.rs`). Only the derived key is stored.

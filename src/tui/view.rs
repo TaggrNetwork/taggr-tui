@@ -156,8 +156,6 @@ pub fn build(app: &App, p: &Page, w: usize) -> Built {
         Kind::Dashboard => dashboard(o, p),
         Kind::Distribution => distribution(o, p),
         Kind::Domains => domains(o, p),
-        Kind::Ethereum => ethereum(o, p),
-        Kind::Recovery => recovery(o, p),
         Kind::Links => links(o),
         Kind::Whitepaper => {
             if p.data.text.is_empty() {
@@ -1649,112 +1647,6 @@ fn domains(o: &mut Out, p: &Page) {
         &[("domain", false), ("owner", false), ("content", false)],
         rows,
     );
-}
-
-fn ethereum(o: &mut Out, p: &Page) {
-    let app = o.app;
-    let Some((addr, cfg, recipes)) = &p.data.eth else {
-        let msg = if p.loading {
-            "loading…"
-        } else {
-            "The Ethereum bridge is not available on this canister."
-        };
-        o.text(Line::styled(msg, dim()));
-        return;
-    };
-    let dec = app.backend.token_decimals;
-    o.heading("Ethereum bridge");
-    o.note("Bridging burns tokens here and returns a signed mint recipe; submit it to the L1 token contract from an Ethereum wallet.");
-    o.kv("Token contract", cfg.token_address.clone());
-    o.kv("Chain id", cfg.chain_id.to_string());
-    o.kv("Minter (canister)", addr.clone());
-    o.kv("Fee", format!("{} credits", cfg.fee_credits));
-    o.kv("Minimum", amount(cfg.min_amount, dec));
-    if app.user.is_some() {
-        o.actions(
-            "eth",
-            vec![("bridge out".into(), act(|app| app.bridge_form()))],
-        );
-    }
-    o.heading("My recipes");
-    let rows = recipes
-        .iter()
-        .map(|r| {
-            let sig = format!("0x{}", hex::encode(&r.signature));
-            let data = mint_calldata(r);
-            let md = format!(
-                "**Recipe #{}**\n\n- to: `{}`\n- amount: `{}` ({} base units)\n- burn block: `{}`\n- signature: `{}`\n\nSubmit `mintWithAuthorization(to, amount × 10^16, {}, signature)` on `{}` (chain {}), e.g.:\n\n```\ncast send {} {}\n```",
-                r.index,
-                r.eth_address,
-                amount(r.amount, dec),
-                r.amount,
-                r.burn_block,
-                sig,
-                r.index,
-                cfg.token_address,
-                cfg.chain_id,
-                cfg.token_address,
-                data
-            );
-            (
-                format!("eth:{}", r.index),
-                vec![(format!("#{}", r.index), accent()), (amount(r.amount, dec), Style::default()), (r.eth_address.clone(), Style::default()), (format!("block {}", r.burn_block), dim())],
-                Some(run(move |app: &mut App| app.text_popup("Mint recipe", &md))),
-            )
-        })
-        .collect();
-    o.table(
-        &[
-            ("recipe", false),
-            ("amount", true),
-            ("to", false),
-            ("burn", false),
-        ],
-        rows,
-    );
-}
-
-/// Calldata of `mintWithAuthorization(address,uint256,uint256,bytes)` for a recipe,
-/// encoded like the web app (`ethereum.tsx` `encodeMint`).
-pub fn mint_calldata(r: &api::EthRecipe) -> String {
-    let word = |v: u128| format!("{v:064x}");
-    let sig = hex::encode(&r.signature);
-    let padded = format!("{sig:0<w$}", w = sig.len().div_ceil(64) * 64);
-    let addr = r.eth_address.to_lowercase();
-    let addr = addr.trim_start_matches("0x");
-    format!(
-        "0xf0d0a6df{addr:0>64}{}{}{}{}{padded}",
-        word(r.amount as u128 * 10_000_000_000_000_000),
-        word(r.index as u128),
-        word(0x80),
-        word(r.signature.len() as u128)
-    )
-}
-
-fn recovery(o: &mut Out, p: &Page) {
-    o.heading("Recovery status");
-    o.md(&p.data.text);
-    o.heading("Supporters");
-    if p.data.strings.is_empty() {
-        o.text(Line::styled("none", dim()));
-    } else {
-        o.note(&p.data.strings.join("  "));
-    }
-    if o.app.user.is_some() {
-        o.actions(
-            "rec",
-            vec![
-                (
-                    "upload emergency binary".into(),
-                    act(|app| app.emergency_binary_form()),
-                ),
-                (
-                    "confirm binary hash".into(),
-                    act(|app| app.confirm_hash_form()),
-                ),
-            ],
-        );
-    }
 }
 
 pub const LINKS: &str = "## Price listings\n\n- [CoinGecko](https://www.coingecko.com/en/coins/taggr)\n- [ICP Coins](https://icpcoins.com/#/token/TAGGR)\n- [ICPSwap](https://app.icpswap.com/info-swap/token/details/6qfxa-ryaaa-aaaai-qbhsq-cai)\n\n\
