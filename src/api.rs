@@ -68,22 +68,21 @@ impl Post {
         !self.hashes.is_empty()
     }
     /// `(blob id, url)` of every attached picture.
-    pub fn images(&self, mainnet: bool) -> BTreeMap<String, String> {
+    pub fn images(&self, local: Option<&str>) -> BTreeMap<String, String> {
         self.files
             .iter()
             .filter_map(|(k, (off, len))| {
                 let (id, bucket) = k.split_once('@')?;
-                Some((id.to_string(), image_url(bucket, *off, *len, mainnet)))
+                Some((id.to_string(), image_url(bucket, *off, *len, local)))
             })
             .collect()
     }
 }
 
-pub fn image_url(bucket: &str, offset: u64, len: u64, mainnet: bool) -> String {
-    let host = if mainnet {
-        format!("https://{bucket}.raw.icp0.io")
-    } else {
-        format!("http://{bucket}.raw.localhost:8080")
+pub fn image_url(bucket: &str, offset: u64, len: u64, local: Option<&str>) -> String {
+    let host = match local {
+        None => format!("https://{bucket}.raw.icp0.io"),
+        Some(h) => format!("http://{bucket}.raw.{h}"),
     };
     format!("{host}/image?offset={offset}&len={len}")
 }
@@ -246,14 +245,17 @@ pub struct Config {
     pub rest: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum DomainSub {
     Journal(UserId),
     BlackListedRealms(Vec<String>),
     WhiteListedRealms(Vec<String>),
-    #[default]
-    #[serde(other)]
-    Unknown,
+}
+
+impl Default for DomainSub {
+    fn default() -> Self {
+        DomainSub::BlackListedRealms(vec![])
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -371,7 +373,8 @@ pub struct EthRecipe {
 pub struct Api {
     pub ic: Ic,
     pub domain: String,
-    pub mainnet: bool,
+    /// `host:port` of a local replica; None on mainnet.
+    pub local: Option<String>,
 }
 
 type Pairs = Vec<(Post, Meta)>;

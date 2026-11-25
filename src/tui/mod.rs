@@ -117,6 +117,8 @@ pub struct App {
     pub hits: Hits,
     pub images: images::Images,
     last_user_load: Instant,
+    /// The signed-in user was loaded at least once.
+    user_loaded: bool,
     /// A post to compose in $EDITOR on the next loop turn.
     edit: Option<compose::Draft>,
     /// A long form field to edit in $EDITOR on the next loop turn.
@@ -155,6 +157,7 @@ impl App {
             hits: Hits::default(),
             images,
             last_user_load: Instant::now(),
+            user_loaded: false,
             edit: None,
             long_edit: None,
             backend_raw: serde_json::Value::Null,
@@ -274,10 +277,15 @@ impl App {
                 if let Some(u) = &u {
                     app.users.insert(u.id, u.name.clone());
                 }
+                let unregistered = u.is_none() && !app.user_loaded;
+                app.user_loaded = true;
                 app.user = u;
                 app.build_nav();
                 if first {
                     app.reload();
+                } else if unregistered && app.pages.len() == 1 {
+                    // a stored key without an account: start where it can register
+                    app.open_root(Kind::Welcome, "Welcome");
                 }
             },
         );
@@ -451,6 +459,7 @@ impl App {
 
     pub fn open_root(&mut self, kind: Kind, title: &str) {
         self.pages.clear();
+        self.focus = Focus::Page;
         self.push(kind, title);
     }
 
@@ -498,11 +507,7 @@ impl App {
             Target::Realm(r) => self.push(Kind::Realm(r.clone()), &format!("/{r}")),
             Target::Tag(t) => self.push(Kind::Tags(vec![t.clone()]), &format!("#{t}")),
             Target::Page(k, title) => self.push(k, &title),
-            Target::Run(f) => {
-                if let Some(f) = f.borrow_mut().take() {
-                    f(self);
-                }
-            }
+            Target::Run(f) => f(self),
             _ => {}
         }
     }
@@ -527,7 +532,11 @@ impl App {
                 format!("{}.icp0.io", self.cfg.canister)
             }
         } else {
-            format!("{}.localhost:8080", self.cfg.canister)
+            format!(
+                "{}.{}",
+                self.cfg.canister,
+                self.cfg.local_host().unwrap_or_default()
+            )
         };
         let scheme = if self.cfg.mainnet() { "https" } else { "http" };
         format!("{scheme}://{host}/#/{route}")
@@ -572,7 +581,7 @@ impl App {
                         app.api = Arc::new(Api {
                             ic,
                             domain: app.cfg.domain.clone(),
-                            mainnet: app.cfg.mainnet(),
+                            local: app.cfg.local_host(),
                         });
                         app.principal = principal;
                         app.user = None;
@@ -609,7 +618,7 @@ impl App {
                     app.api = Arc::new(Api {
                         ic,
                         domain: app.cfg.domain.clone(),
-                        mainnet: app.cfg.mainnet(),
+                        local: app.cfg.local_host(),
                     });
                     app.principal.clear();
                     app.user = None;
@@ -897,7 +906,7 @@ pub fn run(cfg: Config) -> Result<()> {
     let api = Api {
         ic,
         domain: cfg.domain.clone(),
-        mainnet: cfg.mainnet(),
+        local: cfg.local_host(),
     };
 
     let mut terminal = ratatui::init();

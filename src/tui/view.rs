@@ -299,8 +299,28 @@ fn user(o: &mut Out, p: &Page) {
     if u.deactivated {
         l.push(Span::styled("  deactivated", dim()));
     }
-    if u.id < 100 {
+    // labels as on the web profile
+    if u.timestamp < 1_672_500_000_000_000_000 {
         l.push(Span::styled("  OG", Style::default().fg(WARN)));
+    }
+    if u.active_weeks > 12 {
+        l.push(Span::styled("  Frequenter", Style::default().fg(HEAD)));
+    }
+    if app
+        .user
+        .as_ref()
+        .is_some_and(|me| me.id != u.id && u.followees.contains(&me.id))
+    {
+        l.push(Span::styled("  Follows you", Style::default().fg(GOOD)));
+    }
+    let weeks = app
+        .backend
+        .rest
+        .get("voting_power_activity_weeks")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(4);
+    if now_ns().saturating_sub(u.last_activity) / 86_400_000_000_000 > weeks * 7 {
+        l.push(Span::styled("  Inactive", dim()));
     }
     o.text(Line::from(l));
     if !u.previous_names.is_empty() {
@@ -398,7 +418,7 @@ fn user(o: &mut Out, p: &Page) {
     o.row(
         "follows",
         Line::from(vec![
-            Span::styled(format!("{:<24}", "Follows"), dim()),
+            Span::styled(format!("{:<26}", "Follows"), dim()),
             Span::styled(format!("{} users ▸", u.followees.len()), accent()),
         ]),
         Target::Page(
@@ -409,7 +429,7 @@ fn user(o: &mut Out, p: &Page) {
     o.row(
         "followers",
         Line::from(vec![
-            Span::styled(format!("{:<24}", "Followers"), dim()),
+            Span::styled(format!("{:<26}", "Followers"), dim()),
             Span::styled(format!("{} users ▸", u.followers.len()), accent()),
         ]),
         Target::Page(
@@ -420,7 +440,7 @@ fn user(o: &mut Out, p: &Page) {
     o.row(
         "txs",
         Line::from(vec![
-            Span::styled(format!("{:<24}", "Transactions"), dim()),
+            Span::styled(format!("{:<26}", "Transactions"), dim()),
             Span::styled("▸", accent()),
         ]),
         Target::Page(
@@ -431,7 +451,7 @@ fn user(o: &mut Out, p: &Page) {
     o.row(
         "journal",
         Line::from(vec![
-            Span::styled(format!("{:<24}", "Journal"), dim()),
+            Span::styled(format!("{:<26}", "Journal"), dim()),
             Span::styled("▸", accent()),
         ]),
         Target::Page(
@@ -444,7 +464,7 @@ fn user(o: &mut Out, p: &Page) {
         o.row(
             "accounting",
             Line::from(vec![
-                Span::styled(format!("{:<24}", "Accounting"), dim()),
+                Span::styled(format!("{:<26}", "Accounting"), dim()),
                 Span::styled(format!("{} entries ▸", acc.len()), accent()),
             ]),
             run(move |app: &mut App| {
@@ -729,10 +749,11 @@ fn inbox(o: &mut Out, p: &Page) {
             let r = crate::markdown::render(&msg, o.w.saturating_sub(2));
             let mut lines: Vec<Ln> = blocks(app, r.blocks, o.w)
                 .into_iter()
-                .map(|l| match l {
+                .enumerate()
+                .map(|(i, l)| match l {
                     Ln::Text(t) => {
                         let mut sp = vec![Span::styled(
-                            if archived { "  " } else { "● " },
+                            if archived || i > 0 { "  " } else { "● " },
                             Style::default().fg(WARN),
                         )];
                         sp.extend(t.spans);
@@ -891,10 +912,14 @@ fn wallet(o: &mut Out, p: &Page) {
                 run(move |app: &mut App| {
                     app.popup = Some(super::Popup::Menu(
                         super::Menu::new(sym2.clone())
-                            .add("Send", move |app| {
-                                app.send_tokens_form(c2.clone(), sym2, d2, fee2)
+                            .add("Send", {
+                                let (c2, sym2) = (c2.clone(), sym2.clone());
+                                move |app| app.send_tokens_form(c2.clone(), sym2.clone(), d2, fee2)
                             })
-                            .add("Remove from wallet", move |app| app.remove_wallet_token(c3)),
+                            .add("Remove from wallet", {
+                                let c3 = c3.clone();
+                                move |app| app.remove_wallet_token(c3)
+                            }),
                     ))
                 }),
             );
@@ -1062,11 +1087,17 @@ fn settings(o: &mut Out, p: &Page) {
             o.button("Top up", "ICP → cycles", |app: &mut App| {
                 app.top_up_form()
             });
-            o.button(
-                "Add blackhole controller",
-                "public status monitoring",
-                |app: &mut App| app.add_blackhole(),
-            );
+            let has_blackhole = p.data.json["controllers"].as_array().is_some_and(|c| {
+                c.iter()
+                    .any(|v| v.as_str() == Some(crate::storage::BLACKHOLE))
+            });
+            if !has_blackhole {
+                o.button(
+                    "Add blackhole controller",
+                    "public status monitoring",
+                    |app: &mut App| app.add_blackhole(),
+                );
+            }
         }
         None => {
             o.note("Pictures are stored in your own storage canister (a “bucket”), paid with ICP from your wallet.");
@@ -1437,7 +1468,6 @@ fn domains(o: &mut Out, p: &Page) {
                     .collect::<Vec<_>>()
                     .join(" ")
             ),
-            api::DomainSub::Unknown => "?".into(),
         };
         let mine = c.owner == Some(app.me());
         let mut l = vec![Span::styled(name.clone(), accent())];
@@ -1487,16 +1517,20 @@ fn ethereum(o: &mut Out, p: &Page) {
     o.heading("My recipes");
     for r in recipes {
         let sig = format!("0x{}", hex::encode(&r.signature));
+        let data = mint_calldata(r);
         let md = format!(
-            "**Recipe #{}**\n\n- to: `{}`\n- amount: `{}` ({} base units)\n- burn block: `{}`\n- signature: `{}`\n\nCall `mint(to, amount, burnBlock, signature)` on `{}` (chain {}).",
+            "**Recipe #{}**\n\n- to: `{}`\n- amount: `{}` ({} base units)\n- burn block: `{}`\n- signature: `{}`\n\nSubmit `mintWithAuthorization(to, amount × 10^16, {}, signature)` on `{}` (chain {}), e.g.:\n\n```\ncast send {} {}\n```",
             r.index,
             r.eth_address,
             amount(r.amount, dec),
             r.amount,
             r.burn_block,
             sig,
+            r.index,
             cfg.token_address,
-            cfg.chain_id
+            cfg.chain_id,
+            cfg.token_address,
+            data
         );
         o.row(
             format!("eth:{}", r.index),
@@ -1507,6 +1541,23 @@ fn ethereum(o: &mut Out, p: &Page) {
             run(move |app: &mut App| app.text_popup("Mint recipe", &md)),
         );
     }
+}
+
+/// Calldata of `mintWithAuthorization(address,uint256,uint256,bytes)` for a recipe,
+/// encoded like the web app (`ethereum.tsx` `encodeMint`).
+pub fn mint_calldata(r: &api::EthRecipe) -> String {
+    let word = |v: u128| format!("{v:064x}");
+    let sig = hex::encode(&r.signature);
+    let padded = format!("{sig:0<w$}", w = sig.len().div_ceil(64) * 64);
+    let addr = r.eth_address.to_lowercase();
+    let addr = addr.trim_start_matches("0x");
+    format!(
+        "0xf0d0a6df{addr:0>64}{}{}{}{}{padded}",
+        word(r.amount as u128 * 10_000_000_000_000_000),
+        word(r.index as u128),
+        word(0x80),
+        word(r.signature.len() as u128)
+    )
 }
 
 fn recovery(o: &mut Out, p: &Page) {
@@ -1559,7 +1610,7 @@ fn links(o: &mut Out) {
                 o.row(
                     key,
                     Line::raw(label),
-                    run(move |app: &mut App| app.follow_link(l)),
+                    run(move |app: &mut App| app.follow_link(l.clone())),
                 );
             }
         }

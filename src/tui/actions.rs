@@ -59,7 +59,10 @@ impl App {
             KeyCode::Char('c') => self.new_post(self.current_realm()),
             KeyCode::Char('C') => self.new_poll(self.current_realm()),
             KeyCode::Char('R') if k.modifiers.contains(KeyModifiers::CONTROL) => self.reload(),
-            KeyCode::Char('s') => self.reload(),
+            KeyCode::Char('s') => {
+                self.load_user();
+                self.reload();
+            }
             _ => {}
         }
     }
@@ -679,7 +682,12 @@ impl App {
                 app.open_target(Target::Realm(rm))
             });
         }
-        for (i, url) in it.post.images(self.api.mainnet).into_values().enumerate() {
+        for (i, url) in it
+            .post
+            .images(self.api.local.as_deref())
+            .into_values()
+            .enumerate()
+        {
             m = m.add(format!("picture {}", i + 1), move |app| app.open_url(&url));
         }
         for l in r.links {
@@ -902,9 +910,16 @@ impl App {
         if existing.is_some() && realm.is_none() {
             return self.error("realm not loaded yet");
         }
+        let max_downvotes = self
+            .backend
+            .rest
+            .get("default_max_downvotes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5) as u32;
         let r = realm.unwrap_or_else(|| api::Realm {
             comments_filtering: true,
             label_color: "#ffffff".into(),
+            max_downvotes,
             ..Default::default()
         });
         let names = |ids: &[u64]| {
@@ -1014,8 +1029,21 @@ impl App {
                         if let Some(l) = logo {
                             realm.logo = l;
                         }
-                        let method = if create { "create_realm" } else { "edit_realm" };
-                        api.call(method, vec![json!(name), serde_json::to_value(&realm)?])
+                        if !create {
+                            return api
+                                .call(
+                                    "edit_realm",
+                                    vec![json!(name), serde_json::to_value(&realm)?],
+                                )
+                                .await;
+                        }
+                        api.call(
+                            "create_realm",
+                            vec![json!(name), serde_json::to_value(&realm)?],
+                        )
+                        .await?;
+                        // the creator joins, as on the web
+                        api.call_any("toggle_realm_membership", vec![json!(name)])
                             .await
                     },
                     if existing.is_some() {
@@ -1728,6 +1756,25 @@ impl App {
     }
 
     fn proposal_form(&mut self, kind: &'static str) {
+        self.bg(
+            |api| async move {
+                api.ic
+                    .query::<(u64, u64)>("proposal_escrow_balance_required", vec![])
+                    .await
+            },
+            move |app, (escrow, locked)| app.proposal_form_with(kind, escrow + locked),
+        );
+    }
+
+    fn proposal_form_with(&mut self, kind: &'static str, need: u64) {
+        let have = self.user.as_ref().map(|u| u.balance).unwrap_or(0);
+        if have < need {
+            return self.error(format!(
+                "to open a new proposal, you need at least {} {} on your balance",
+                amount(need, self.backend.token_decimals),
+                self.backend.token_symbol
+            ));
+        }
         let dec = self.backend.token_decimals;
         let sym = self.backend.token_symbol.clone();
         let mut f = Form::new(format!("Proposal: {kind}"), "propose")
@@ -1791,10 +1838,15 @@ impl App {
                     }
                     let post = api.add_post(&desc, vec![], None, None, None).await?;
                     let r = match binary {
-                        Some(bin) => json!(api.propose_release(post, a, bin).await?),
-                        None => {
-                            api.call("create_proposal", vec![json!(post), payload])
-                                .await?
+                        Some(bin) => api.propose_release(post, a, bin).await.map(|v| json!(v)),
+                        None => api.call("create_proposal", vec![json!(post), payload]).await,
+                    };
+                    let r = match r {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return Err(anyhow!(
+                                "post #{post} could be created, but the proposal creation failed: {e}"
+                            ));
                         }
                     };
                     Ok(r)
@@ -1885,11 +1937,7 @@ impl App {
                         move |api| async move {
                             api.call(
                                 "set_domain_config",
-                                vec![
-                                    json!(d),
-                                    serde_json::to_value(api::DomainConfig::default())?,
-                                    json!("remove"),
-                                ],
+                                vec![json!(d), json!({}), json!("remove")],
                             )
                             .await
                         },
@@ -1914,7 +1962,6 @@ impl App {
             api::DomainSub::Journal(u) => ("Journal", self.name(*u)),
             api::DomainSub::WhiteListedRealms(r) => ("Whitelisted realms", r.join(", ")),
             api::DomainSub::BlackListedRealms(r) => ("Blacklisted realms", r.join(", ")),
-            api::DomainSub::Unknown => ("Blacklisted realms", String::new()),
         };
         let mut f = Form::new(
             if d.is_some() {
@@ -2025,19 +2072,18 @@ impl App {
     }
 
     pub fn emergency_binary_form(&mut self) {
-        let f =
-            Form::new("Emergency release", "upload")
-                .field(Field::text("Binary (path to .wasm.gz)", ""))
-                .on_submit(|app, v| {
-                    let bin = std::fs::read(shellexpand(v[0].trim())).map_err(|e| e.to_string())?;
-                    app.act(
+        let f = Form::new("Emergency release", "upload")
+            .field(Field::text("Binary (path to .wasm.gz)", ""))
+            .on_submit(|app, v| {
+                let bin = std::fs::read(shellexpand(v[0].trim())).map_err(|e| e.to_string())?;
+                app.act(
                         move |api| async move {
                             api.set_emergency_release(bin).await.map(|_| Value::Null)
                         },
                         "binary uploaded",
                     );
-                    Ok(())
-                });
+                Ok(())
+            });
         self.popup = Some(Popup::Form(f));
     }
 
