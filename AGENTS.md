@@ -79,12 +79,15 @@ On this machine `tmux` may be a shell alias; call `/usr/bin/tmux`. For a local r
   `Page` has a unique `id`; loads find their page by it, so late replies never land on
   another page. `view::build` turns a page into `Entry`s (lines + optional `Target`) for the
   current width; `Page::dirty` forces a rebuild, `sel_key` keeps the selection across rebuilds.
-- **Selection**: only entries with a target are selectable; j/k scroll inside an entry taller
-  than half the view before moving on.
+- **Selection**: only entries with a target are selectable; ↑/↓ (j/k) always move to the
+  previous/next one, Space/PgUp/PgDn scroll. Only Enter opens; ←/h/Esc go back. Loads that
+  reset a page (tab switch) must not leave `sel_key` on the "load more" row; "load more"
+  selects the first new post.
 - **Layout helpers** (`page::Out`): consecutive `kv` pairs become a multi-column grid,
   `users` flows names inline, `table` aligns columns, `actions` is a row of ▸ actions (Enter:
   menu), `tab_bar` records click ranges, `boxed` frames reposts, polls and reports; comments
-  hang off `│` guides. Keep screens dense: no one-item-per-line lists. The bottom line
+  hang off `│` guides. Feed posts and the open post are framed cards (`page::post_card`,
+  `frame_style`); `draw` lights the selected frame up. Keep screens dense: no one-item-per-line lists. The bottom line
   (`draw::hints`) lists the keys for the selected target.
 - **Backend shapes**: JSON methods take `null`, a value, or an array of arguments
   (`ic::encode_args`); updates reply `{"Ok": …}`/`{"Err": …}` (`Api::call`), a few toggles
@@ -94,6 +97,10 @@ On this machine `tmux` may be a shell alias; call `/usr/bin/tmux`. For a local r
   posts have header lines (`Realm:`, polls `Deadline:`/`Option:`). Local `![](path)`
   pictures are uploaded to the user's bucket on posting. Edits send a diff-match-patch patch
   from the new body back to the old one (as the web app does).
-- **Pictures**: no terminal capability query (it swallows the first key when a terminal does
-  not answer); the protocol comes from the environment or `image_protocol`, half blocks in tmux.
+- **Pictures**: collapsed to one line by default (`I` per post, `expand_images` config). No
+  terminal capability query (it swallows the first key when a terminal does not answer); the
+  protocol comes from the environment or `image_protocol`, half blocks in tmux.
+- **Icons**: Nerd Font glyphs by default via `page::ic(app, nerd, plain)`; always give a plain
+  fallback for `icons = "plain"`. Emoji variation selectors and joiners are stripped
+  (`markdown::render`, `draw::plain_width`): terminals disagree on their width.
 - British English in user-facing text, like the web app.
