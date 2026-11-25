@@ -25,11 +25,8 @@ fn more(o: &mut Out) {
 
 /// Posts separated by rules.
 fn posts(o: &mut Out, p: &Page) {
-    for (i, it) in p.items.iter().enumerate() {
-        if i > 0 {
-            o.rule();
-        }
-        let e = post_entry(o.app, p, it, o.w, false, 0);
+    for it in &p.items {
+        let e = post_card(o.app, p, it, o.w, false);
         o.entry(e);
     }
     if p.more {
@@ -619,7 +616,7 @@ fn thread(o: &mut Out, p: &Page) {
     if !p.data.parents.is_empty() {
         o.rule();
     }
-    let e = post_entry(app, p, main, o.w, true, 0);
+    let e = post_card(app, p, main, o.w, true);
     o.entry(e);
     post_footer(o, main);
     post_actions(o, main);
@@ -1325,7 +1322,9 @@ fn tokens(o: &mut Out, p: &Page) {
             .map(|(i, v)| {
                 let bal = v[1].as_u64().unwrap_or(0);
                 let uid = v[2].as_u64();
-                let name = uid.map(|u| format!("@{}", app.name(u))).unwrap_or_else(|| "—".into());
+                let name = uid
+                    .map(|u| format!("@{}", app.name(u)))
+                    .unwrap_or_else(|| "—".into());
                 let active = v[3].as_bool().unwrap_or(false);
                 let owner = v[0]["owner"].as_str().unwrap_or("").to_string();
                 (

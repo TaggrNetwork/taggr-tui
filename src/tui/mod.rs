@@ -711,7 +711,8 @@ impl App {
                 self.nav_sel = self.nav.len();
                 self.move_nav(-1);
             }
-            KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => self.nav_go(),
+            KeyCode::Enter => self.nav_go(),
+            KeyCode::Char('l') | KeyCode::Right => self.focus = Focus::Page,
             KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => self.focus = Focus::Page,
             _ => self.global_key(k),
         }

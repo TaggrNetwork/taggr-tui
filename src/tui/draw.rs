@@ -246,11 +246,16 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
             match l {
                 Ln::Text(t) => {
                     let mut sp = vec![bar.clone()];
-                    sp.extend(
-                        t.spans
-                            .iter()
-                            .map(|s| Span::styled(plain_width(&s.content), s.style)),
-                    );
+                    // the selected post's frame lights up
+                    let lit = sel && focused;
+                    sp.extend(t.spans.iter().map(|s| {
+                        let st = if lit && s.style == super::page::frame_style() {
+                            Style::default().fg(ACCENT)
+                        } else {
+                            s.style
+                        };
+                        Span::styled(plain_width(&s.content), st)
+                    }));
                     let mut line = Line::from(sp);
                     // one-line selectable rows get a full highlight
                     if sel && focused && e.lines.len() == 1 && e.target.is_some() {
@@ -676,13 +681,16 @@ fn draw_popup(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_help(f: &mut Frame, area: Rect) {
     let keys: &[(&str, &str)] = &[
         ("Tab", "switch between sidebar and page"),
-        ("j k  ↓ ↑", "select (long posts scroll first)"),
+        ("j k  ↓ ↑", "previous / next post or item"),
         ("g G  PgUp PgDn  Space", "top / bottom / page"),
         (
-            "Enter  l",
+            "Enter",
             "open: post, user, realm, tag, notification, button",
         ),
-        ("Esc  h", "back (to the sidebar on the first page)"),
+        (
+            "Esc  h  ←",
+            "back (to the sidebar on the first page; → returns)",
+        ),
         (
             "1-9  [ ]",
             "switch tabs (realms, profiles, proposals); tabs are clickable",
