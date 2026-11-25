@@ -641,11 +641,15 @@ fn wrap_pgp(md: &str) -> String {
 
 /// Plain text of the first non-empty line of `md`, for list rows.
 pub fn first_line(md: &str) -> String {
-    md.lines()
-        .map(|l| l.trim().trim_start_matches('#').trim())
-        .find(|l| !l.is_empty())
-        .unwrap_or("")
-        .to_string()
+    for b in render(md, 10_000).blocks {
+        if let Block::Line(l) = b {
+            let t: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+            if !t.trim().is_empty() {
+                return t.trim().to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 #[cfg(test)]

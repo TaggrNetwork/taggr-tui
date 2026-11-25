@@ -1,12 +1,11 @@
 //! Pages: what each one loads and how it turns into selectable entries.
 
-use super::{Action, App};
+use super::App;
 use crate::api::{self, Item, PostId, Realm, User};
 use crate::markdown::{self, Block};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
@@ -61,7 +60,7 @@ pub enum Target {
     Realm(String),
     Tag(String),
     Page(Kind, String),
-    Run(Rc<RefCell<Option<Action>>>),
+    Run(Rc<dyn Fn(&mut App)>),
     Notification(u64),
     Invite(String),
     Domain(String),
@@ -71,8 +70,8 @@ pub enum Target {
     More,
 }
 
-pub fn run(f: impl FnOnce(&mut App) + 'static) -> Target {
-    Target::Run(Rc::new(RefCell::new(Some(Box::new(f)))))
+pub fn run(f: impl Fn(&mut App) + 'static) -> Target {
+    Target::Run(Rc::new(f))
 }
 
 pub enum Ln {
@@ -326,11 +325,15 @@ impl Page {
 
 // ---- formatting helpers --------------------------------------------------------
 
-pub fn ago(ns: u64) -> String {
-    let now = std::time::SystemTime::now()
+pub fn now_ns() -> u64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+pub fn ago(ns: u64) -> String {
+    let now = now_ns();
     let s = now.saturating_sub(ns) / 1_000_000_000;
     match s {
         0..60 => format!("{s}s"),
@@ -442,8 +445,8 @@ impl<'a> Out<'a> {
     }
     /// `label: value` row.
     pub fn kv(&mut self, k: &str, v: impl Into<String>) {
-        let first = [Span::styled(format!("{k:<24}"), dim())];
-        let rest = [Span::raw(" ".repeat(24))];
+        let first = [Span::styled(format!("{k:<26}"), dim())];
+        let rest = [Span::raw(" ".repeat(26))];
         let lines = markdown::wrap(vec![Span::raw(v.into())], self.w, &first, &rest);
         self.e.push(Entry {
             lines: lines.into_iter().map(Ln::Text).collect(),
@@ -483,7 +486,7 @@ impl<'a> Out<'a> {
         });
     }
     /// A selectable action row: `▸ label` running `f`.
-    pub fn button(&mut self, label: &str, hint: &str, f: impl FnOnce(&mut App) + 'static) {
+    pub fn button(&mut self, label: &str, hint: &str, f: impl Fn(&mut App) + 'static) {
         let mut sp = vec![Span::styled(format!("▸ {label}"), accent())];
         if !hint.is_empty() {
             sp.push(Span::styled(format!("  {hint}"), dim()));
@@ -648,7 +651,7 @@ pub fn post_entry(app: &App, page: &Page, it: &Item, w: usize, full: bool, depth
             p.body.split(markdown::CUT).next().unwrap_or("").to_string()
         };
         let r = markdown::render(&body, bw);
-        let urls = p.images(app.api.mainnet);
+        let urls = p.images(app.api.local.as_deref());
         let mut body = blocks_with(app, r.blocks, bw, &urls);
         let cut = !full && (body.len() > PREVIEW || p.body.contains(markdown::CUT));
         if !full && body.len() > PREVIEW {
@@ -748,7 +751,7 @@ fn poll_lines(app: &App, p: &api::Post, poll: &api::Poll, w: usize) -> Vec<Line<
         out.push(Line::from(sp));
     }
     let tokens: u64 = poll.weighted_by_tokens.values().sum();
-    let mut info = format!("{total} votes · ");
+    let mut info = format!("{total} vote{} · ", if total == 1 { "" } else { "s" });
     if open {
         info += &format!(
             "closes in {}h · v: vote",
@@ -1110,9 +1113,10 @@ impl App {
                     })
                     .unwrap_or_default();
                 self.want_names(ids);
-                let bucket = self.user.as_ref().and_then(|u| u.bucket.clone());
                 self.bg(
                     move |api| async move {
+                        // the bucket may be new: ask for it rather than trusting the cached user
+                        let bucket = api.user(None).await.ok().flatten().and_then(|u| u.bucket);
                         let pending = api.principal_change_target().await.ok().flatten();
                         let status = match bucket {
                             Some(b) => crate::storage::status(&api, &b).await.ok(),
@@ -1290,7 +1294,11 @@ impl App {
                 let url = if self.cfg.mainnet() {
                     format!("https://{}.icp0.io/WHITEPAPER.md", self.cfg.canister)
                 } else {
-                    format!("http://{}.localhost:8080/WHITEPAPER.md", self.cfg.canister)
+                    format!(
+                        "http://{}.{}/WHITEPAPER.md",
+                        self.cfg.canister,
+                        self.cfg.local_host().unwrap_or_default()
+                    )
                 };
                 self.bg(
                     move |_| async move {

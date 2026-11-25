@@ -300,6 +300,10 @@ async fn upload(
 }
 
 fn post(app: &mut App, d: Draft) {
+    if matches!(d.what, What::Poll) && d.poll.is_none() {
+        app.popup = Some(Popup::Send(d, 0));
+        return app.error("a poll needs at least two Option: lines; e: edit");
+    }
     let bucket = app.user.as_ref().and_then(|u| u.bucket.clone());
     let max = app.backend.max_blob_size_bytes;
     let d2 = d.clone();

@@ -68,6 +68,14 @@ impl Config {
         Ok(cfg)
     }
 
+    /// `host:port` of a local replica (None on mainnet), for canister subdomains.
+    pub fn local_host(&self) -> Option<String> {
+        (!self.mainnet()).then(|| {
+            let u = self.url.trim_end_matches('/');
+            u.split_once("://").map(|x| x.1).unwrap_or(u).to_string()
+        })
+    }
+
     /// Whether `url` points to a mainnet boundary node (else: a local replica).
     pub fn mainnet(&self) -> bool {
         ["ic0.app", "icp0.io", "icp-api.io"]
