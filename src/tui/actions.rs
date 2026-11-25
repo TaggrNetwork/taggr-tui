@@ -100,7 +100,7 @@ impl App {
         self.popup = Some(Popup::Form(f));
     }
 
-    fn realm_search_prompt(&mut self) {
+    pub fn realm_search_prompt(&mut self) {
         let q = self
             .pages
             .last()
@@ -188,23 +188,27 @@ impl App {
                 self.tab_changed();
             }
             KeyCode::Char('[') => {
-                p.tab = p.tab.checked_sub(1).unwrap_or(5);
+                let n = p.tab_row.as_ref().map(|t| t.1.len()).unwrap_or(1);
+                p.tab = p.tab.checked_sub(1).unwrap_or(n.saturating_sub(1));
+                self.tab_changed();
+            }
+            KeyCode::Char(c @ '1'..='9')
+                if p.tab_row
+                    .as_ref()
+                    .is_some_and(|t| (c as usize - '1' as usize) < t.1.len()) =>
+            {
+                p.tab = c as usize - '1' as usize;
                 self.tab_changed();
             }
             _ => self.action_key(k),
         }
     }
 
-    fn tab_changed(&mut self) {
+    pub fn tab_changed(&mut self) {
         let Some(p) = self.pages.last_mut() else {
             return;
         };
-        let n = match p.kind {
-            Kind::Proposals => 6,
-            Kind::Realms | Kind::User(_) => 3,
-            Kind::Realm(_) | Kind::Inbox => 2,
-            _ => 1,
-        };
+        let n = p.tab_row.as_ref().map(|t| t.1.len()).unwrap_or(1).max(1);
         p.tab %= n;
         p.sel_key.clear();
         p.items.clear();
@@ -215,7 +219,7 @@ impl App {
     }
 
     /// Keys acting on the selected thing or on the page.
-    fn action_key(&mut self, k: KeyEvent) {
+    pub fn action_key(&mut self, k: KeyEvent) {
         let kind = self.pages.last().map(|p| p.kind.clone());
         let target = self.pages.last().and_then(|p| p.selected_target().cloned());
         let post = self.sel_post_id().or(match &kind {
@@ -244,6 +248,7 @@ impl App {
                 'v' => return self.poll_vote(id),
                 'm' => return self.realm_cleanup(id),
                 'i' => return self.post_info(id),
+                'I' => return self.toggle_pictures(id),
                 'o' => return self.links_menu(id),
                 'O' => {
                     let u = self.web_url(&format!("post/{id}"));
@@ -346,6 +351,16 @@ impl App {
         self.pages.iter().rev().find_map(|p| p.post(id)).cloned()
     }
 
+    /// Expands or collapses the pictures of a post.
+    pub fn toggle_pictures(&mut self, id: PostId) {
+        if !self.expanded.remove(&id) {
+            self.expanded.insert(id);
+        }
+        for p in &mut self.pages {
+            p.dirty();
+        }
+    }
+
     pub fn reply(&mut self, id: PostId) {
         if !self.need_user() {
             return;
@@ -390,7 +405,7 @@ impl App {
         self.edit = Some(compose::Draft::edit(&it.post));
     }
 
-    fn react_menu(&mut self, id: PostId) {
+    pub fn react_menu(&mut self, id: PostId) {
         if !self.need_user() {
             return;
         }
@@ -417,7 +432,7 @@ impl App {
         self.popup = Some(Popup::Menu(m));
     }
 
-    fn toggle(&mut self, method: &'static str, id: PostId, done: &'static str) {
+    pub fn toggle(&mut self, method: &'static str, id: PostId, done: &'static str) {
         if !self.need_user() {
             return;
         }
@@ -427,7 +442,7 @@ impl App {
         );
     }
 
-    fn toggle_bookmark(&mut self, id: PostId) {
+    pub fn toggle_bookmark(&mut self, id: PostId) {
         let on = self
             .user
             .as_ref()
@@ -450,7 +465,7 @@ impl App {
         );
     }
 
-    fn toggle_hide(&mut self, id: PostId) {
+    pub fn toggle_hide(&mut self, id: PostId) {
         let on = self
             .item(id)
             .is_some_and(|i| i.post.hidden_for.contains(&self.me()));
@@ -461,7 +476,7 @@ impl App {
         );
     }
 
-    fn toggle_pin(&mut self, id: PostId) {
+    pub fn toggle_pin(&mut self, id: PostId) {
         if self.item(id).is_some_and(|i| i.post.user != self.me()) {
             return self.error("you can only pin your own posts");
         }
@@ -480,7 +495,7 @@ impl App {
         );
     }
 
-    fn tip_form(&mut self, id: PostId) {
+    pub fn tip_form(&mut self, id: PostId) {
         if !self.need_user() {
             return;
         }
@@ -506,7 +521,7 @@ impl App {
         self.popup = Some(Popup::Form(f));
     }
 
-    fn delete_post(&mut self, id: PostId) {
+    pub fn delete_post(&mut self, id: PostId) {
         let Some(it) = self.item(id) else { return };
         if it.post.user != self.me() {
             return self.error("you can only delete your own posts");
@@ -544,7 +559,7 @@ impl App {
         );
     }
 
-    fn poll_vote(&mut self, id: PostId) {
+    pub fn poll_vote(&mut self, id: PostId) {
         if !self.need_user() {
             return;
         }
@@ -585,7 +600,7 @@ impl App {
         self.popup = Some(Popup::Menu(m));
     }
 
-    fn realm_cleanup(&mut self, id: PostId) {
+    pub fn realm_cleanup(&mut self, id: PostId) {
         let Some(it) = self.item(id) else { return };
         let Some(realm) = it.post.realm.clone() else {
             return self.error("the post is in no realm");
@@ -601,7 +616,7 @@ impl App {
         self.popup = Some(Popup::Form(f));
     }
 
-    fn post_info(&mut self, id: PostId) {
+    pub fn post_info(&mut self, id: PostId) {
         let Some(it) = self.item(id) else { return };
         let p = &it.post;
         let mut md = format!(
@@ -665,7 +680,7 @@ impl App {
         self.popup = Some(Popup::Menu(m));
     }
 
-    fn links_menu(&mut self, id: PostId) {
+    pub fn links_menu(&mut self, id: PostId) {
         let Some(it) = self.item(id) else { return };
         let r = crate::markdown::render(&it.post.body, 200);
         let mut m = Menu::new("Links");
@@ -696,7 +711,7 @@ impl App {
         self.popup = Some(Popup::Menu(m));
     }
 
-    fn page_links_menu(&mut self) {
+    pub fn page_links_menu(&mut self) {
         let text = match self.pages.last() {
             Some(p) if matches!(p.kind, Kind::Whitepaper) => p.data.text.clone(),
             _ => super::view::LINKS.to_string(),
@@ -734,7 +749,7 @@ impl App {
 
     // ---- users ------------------------------------------------------------------------
 
-    fn toggle_follow(&mut self, uid: u64) {
+    pub fn toggle_follow(&mut self, uid: u64) {
         if !self.need_user() {
             return;
         }
@@ -751,7 +766,7 @@ impl App {
         );
     }
 
-    fn toggle_block(&mut self, uid: u64) {
+    pub fn toggle_block(&mut self, uid: u64) {
         if !self.need_user() {
             return;
         }
@@ -791,14 +806,14 @@ impl App {
         );
     }
 
-    fn unlist(&mut self, kind: &'static str, v: String) {
+    pub fn unlist(&mut self, kind: &'static str, v: String) {
         match kind {
             "blacklist" => self.toggle_block(v.parse().unwrap_or(0)),
             k => self.toggle_filter(k, v),
         }
     }
 
-    fn send_credits_form(&mut self, uid: u64) {
+    pub fn send_credits_form(&mut self, uid: u64) {
         if !self.need_user() {
             return;
         }
@@ -819,7 +834,7 @@ impl App {
         self.popup = Some(Popup::Form(f));
     }
 
-    fn report_form(&mut self, uid: u64) {
+    pub fn report_form(&mut self, uid: u64) {
         if !self.need_user() {
             return;
         }
@@ -841,7 +856,7 @@ impl App {
         self.popup = Some(Popup::Form(f));
     }
 
-    fn vote_report(&mut self, uid: u64, agree: bool) {
+    pub fn vote_report(&mut self, uid: u64, agree: bool) {
         if !self.user.as_ref().is_some_and(|u| u.stalwart) {
             return self.error("only stalwarts vote on reports");
         }
@@ -856,7 +871,7 @@ impl App {
 
     // ---- realms, feeds ------------------------------------------------------------
 
-    fn toggle_membership(&mut self, r: String) {
+    pub fn toggle_membership(&mut self, r: String) {
         if !self.need_user() {
             return;
         }
@@ -881,7 +896,7 @@ impl App {
         }
     }
 
-    fn toggle_feed(&mut self, tags: Vec<String>) {
+    pub fn toggle_feed(&mut self, tags: Vec<String>) {
         if !self.need_user() {
             return;
         }
@@ -1059,7 +1074,7 @@ impl App {
 
     // ---- inbox ----------------------------------------------------------------------
 
-    fn dismiss(&mut self, ids: Vec<u64>, say: bool) {
+    pub fn dismiss(&mut self, ids: Vec<u64>, say: bool) {
         if let Some(u) = self.user.as_mut() {
             for i in &ids {
                 if let Some(n) = u.notifications.get_mut(i) {
@@ -1268,7 +1283,7 @@ impl App {
         );
     }
 
-    fn show_tx(&mut self, id: u32) {
+    pub fn show_tx(&mut self, id: u32) {
         let dec = self.backend.token_decimals;
         let sym = self.backend.token_symbol.clone();
         self.bg(
@@ -1291,11 +1306,11 @@ impl App {
                 }
                 let (from, to) = (t.from.owner.clone(), t.to.owner.clone());
                 let mut m = Menu::new(format!("Transaction {id}")).add("Details", move |app| app.text_popup(format!("Transaction {id}"), &md));
-                m = m.add(format!("Transactions of {}", super::view::fit(&from, 30)), {
+                m = m.add(format!("Transactions of {}", super::page::fit(&from, 30)), {
                     let f = from.clone();
                     move |app| app.push(Kind::Transactions(f.clone(), String::new()), &format!("transactions of {f}"))
                 });
-                m = m.add(format!("Transactions of {}", super::view::fit(&to, 30)), move |app| {
+                m = m.add(format!("Transactions of {}", super::page::fit(&to, 30)), move |app| {
                     app.push(Kind::Transactions(to.clone(), String::new()), &format!("transactions of {to}"))
                 });
                 app.popup = Some(Popup::Menu(m));
@@ -1662,7 +1677,7 @@ impl App {
         (!p.data.json.is_null()).then(|| p.data.json.clone())
     }
 
-    fn vote_proposal(&mut self, adopt: bool) {
+    pub fn vote_proposal(&mut self, adopt: bool) {
         if !self.need_user() {
             return;
         }
@@ -1724,7 +1739,7 @@ impl App {
         }
     }
 
-    fn cancel_proposal(&mut self) {
+    pub fn cancel_proposal(&mut self) {
         let Some(pr) = self.proposal_value() else {
             return;
         };
@@ -1740,7 +1755,7 @@ impl App {
         );
     }
 
-    fn new_proposal_menu(&mut self) {
+    pub fn new_proposal_menu(&mut self) {
         if !self.need_user() {
             return;
         }
@@ -1755,7 +1770,7 @@ impl App {
         self.popup = Some(Popup::Menu(m));
     }
 
-    fn proposal_form(&mut self, kind: &'static str) {
+    pub fn proposal_form(&mut self, kind: &'static str) {
         self.bg(
             |api| async move {
                 api.ic
@@ -1766,7 +1781,7 @@ impl App {
         );
     }
 
-    fn proposal_form_with(&mut self, kind: &'static str, need: u64) {
+    pub fn proposal_form_with(&mut self, kind: &'static str, need: u64) {
         let have = self.user.as_ref().map(|u| u.balance).unwrap_or(0);
         if have < need {
             return self.error(format!(
@@ -1914,7 +1929,7 @@ impl App {
 
     // ---- domains ----------------------------------------------------------------------
 
-    fn domain_menu(&mut self, d: String) {
+    pub fn domain_menu(&mut self, d: String) {
         let mine = self
             .pages
             .last()

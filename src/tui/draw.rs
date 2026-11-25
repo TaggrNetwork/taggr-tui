@@ -53,6 +53,16 @@ fn nav_icon(app: &App, n: &Nav) -> &'static str {
     }
 }
 
+/// Drops emoji variation selectors and joiners: terminals disagree on their width,
+/// which leaves stray characters behind.
+fn plain_width(s: &str) -> String {
+    if s.contains(['\u{FE0F}', '\u{200D}']) {
+        s.replace(['\u{FE0F}', '\u{200D}'], "")
+    } else {
+        s.to_string()
+    }
+}
+
 fn pane(title: Line<'static>, focused: bool) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
@@ -116,7 +126,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 fn draw_nav(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Nav;
     let title = match &app.user {
-        Some(u) => format!(" @{} ", u.name),
+        Some(u) => format!(" @{} · {} cr ", u.name, super::page::isep(u.cycles)),
         None if !app.principal.is_empty() => " new user ".into(),
         None => " Taggr ".into(),
     };
@@ -186,7 +196,9 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
     // two columns for the selection bar
     let w = inner.width.saturating_sub(2) as usize;
     if page.built != Some(inner.width) {
-        page.entries = super::view::build(app, &page, w);
+        let (entries, tabs) = super::view::build(app, &page, w);
+        page.entries = entries;
+        page.tab_row = tabs;
         page.built = Some(inner.width);
         page.restore_sel();
         let total = page.total();
@@ -211,6 +223,9 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
         let top = y.max(page.off) - page.off;
         let vis = (y + eh).min(page.off + h) - y.max(page.off);
         app.hits.entries.push((i, inner.y + top as u16, vis as u16));
+        if page.tab_row.as_ref().is_some_and(|t| t.0 == i) && y >= page.off {
+            app.hits.tabs = Some((inner.y + top as u16, inner.x + 2));
+        }
         let bar = if sel && focused {
             Span::styled("▌ ", Style::default().fg(ACCENT))
         } else if sel {
@@ -221,7 +236,7 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
         for l in &e.lines {
             let lh = match l {
                 Ln::Text(_) => 1,
-                Ln::Image(_, r, _) => *r as usize,
+                Ln::Image(_, r, _, _) => *r as usize,
             };
             if y + lh <= page.off || y >= page.off + h {
                 y += lh;
@@ -231,7 +246,11 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
             match l {
                 Ln::Text(t) => {
                     let mut sp = vec![bar.clone()];
-                    sp.extend(t.spans.iter().cloned());
+                    sp.extend(
+                        t.spans
+                            .iter()
+                            .map(|s| Span::styled(plain_width(&s.content), s.style)),
+                    );
                     let mut line = Line::from(sp);
                     // one-line selectable rows get a full highlight
                     if sel && focused && e.lines.len() == 1 && e.target.is_some() {
@@ -243,7 +262,7 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
                         Rect::new(inner.x, row, inner.width, 1),
                     );
                 }
-                Ln::Image(url, rows, alt) => {
+                Ln::Image(url, rows, alt, ind) => {
                     let fully = y >= page.off && y + lh <= page.off + h;
                     for r in 0..lh {
                         let ry = y + r;
@@ -258,7 +277,12 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
                     if fully && !app.images.failed(url) {
                         imgs.push((
                             url.clone(),
-                            Rect::new(inner.x + 2, row, w as u16, *rows),
+                            Rect::new(
+                                inner.x + 2 + ind,
+                                row,
+                                (w as u16).saturating_sub(*ind),
+                                *rows,
+                            ),
                             alt.clone(),
                         ));
                     } else {
@@ -269,7 +293,7 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
                         };
                         f.render_widget(
                             Paragraph::new(Line::styled(label, dim())),
-                            Rect::new(inner.x + 2, row, w as u16, 1),
+                            Rect::new(inner.x + 2 + ind, row, (w as u16).saturating_sub(*ind), 1),
                         );
                     }
                 }
@@ -306,49 +330,98 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
     app.pages.push(page);
 }
 
+/// Keys for what is focused and selected, most useful first.
+fn hints(app: &App) -> Vec<(String, String)> {
+    use super::page::Target;
+    let k = |a: &str, b: &str| (a.to_string(), b.to_string());
+    if app.focus == Focus::Nav {
+        return vec![
+            k("j k", "move"),
+            k("Enter", "open"),
+            k("Tab", "page"),
+            k("/", "search"),
+            k("c", "new post"),
+            k("?", "help"),
+            k("q", "quit"),
+        ];
+    }
+    let signed = app.user.is_some();
+    let page = app.pages.last();
+    let mut v = vec![];
+    match page.and_then(|p| p.selected_target()) {
+        Some(Target::Post(id)) => {
+            let it = page.and_then(|p| p.post(*id));
+            let mine = it.is_some_and(|i| i.post.user == app.me());
+            let open_here = matches!(page.map(|p| &p.kind), Some(Kind::Post(cur)) if cur == id);
+            if !open_here {
+                v.push(k("Enter", "open"));
+            }
+            if signed {
+                v.extend([k("r", "reply"), k("+", "react"), k("b", "bookmark")]);
+                if mine {
+                    v.extend([k("e", "edit"), k("D", "delete")]);
+                } else {
+                    v.push(k("t", "tip"));
+                }
+                v.push(k("P", "repost"));
+                if it.is_some_and(|i| i.post.poll().is_some()) {
+                    v.push(k("v", "vote"));
+                }
+            }
+            if it.is_some_and(|i| !i.post.files.is_empty()) {
+                v.push(k("I", "pictures"));
+            }
+            v.extend([k("o", "links"), k("i", "info")]);
+            if !signed {
+                v.push(k("", "sign in (sidebar) to reply and react"));
+            }
+        }
+        Some(Target::User(_) | Target::UserId(_)) => {
+            v.push(k("Enter", "profile"));
+            if signed {
+                v.extend([
+                    k("f", "follow"),
+                    k("M", "mute"),
+                    k("B", "block"),
+                    k("$", "credits"),
+                ]);
+            }
+        }
+        Some(Target::Realm(_)) => {
+            v.push(k("Enter", "open realm"));
+            if signed {
+                v.push(k("J", "join/leave"));
+            }
+        }
+        Some(Target::Notification(_)) => v.extend([
+            k("Enter", "open"),
+            k("d", "dismiss"),
+            k("D", "clear all"),
+            k("w", "unwatch"),
+        ]),
+        Some(Target::Listed(..)) => v.push(k("x", "remove")),
+        Some(Target::Invite(_)) => v.push(k("Enter", "edit invite")),
+        Some(Target::Domain(_)) => v.push(k("Enter", "edit/open")),
+        Some(Target::Tx(_)) => v.push(k("Enter", "details")),
+        Some(Target::More) => v.push(k("Enter", "load more")),
+        Some(Target::Run(_)) => v.push(k("Enter", "choose")),
+        Some(Target::Tag(_) | Target::Page(..)) => v.push(k("Enter", "open")),
+        None => {}
+    }
+    if let Some(t) = page.and_then(|p| p.tab_row.as_ref()) {
+        v.push(k(&format!("1-{} [ ]", t.1.len()), "tab"));
+    }
+    v.extend([k("j k", "move"), k("Esc", "back"), k("?", "help")]);
+    v
+}
+
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let left = match &app.status {
         Some((m, true, _)) => Line::styled(format!(" {m}"), Style::default().fg(Color::Red)),
         Some((m, false, _)) => Line::styled(format!(" {m}"), Style::default().fg(Color::Green)),
         None => {
-            let kind = app.pages.last().map(|p| &p.kind);
-            let post_sel = app.sel_post_id().is_some() || matches!(kind, Some(Kind::Post(_)));
-            let keys: Vec<(&str, &str)> = if app.focus == Focus::Nav {
-                vec![
-                    ("j k", "move"),
-                    ("Enter", "open"),
-                    ("Tab", "page"),
-                    ("/", "search"),
-                    ("c", "post"),
-                    ("?", "help"),
-                    ("q", "quit"),
-                ]
-            } else if post_sel && app.user.is_some() {
-                vec![
-                    ("Enter", "open"),
-                    ("Esc", "back"),
-                    ("r", "reply"),
-                    ("+", "react"),
-                    ("b", "bookmark"),
-                    ("o", "links"),
-                    ("c", "post"),
-                    ("[ ]", "tab"),
-                    ("?", "help"),
-                ]
-            } else {
-                vec![
-                    ("j k", "move"),
-                    ("Enter", "open"),
-                    ("Esc", "back"),
-                    ("Tab", "sidebar"),
-                    ("s", "reload"),
-                    ("/", "search"),
-                    ("?", "help"),
-                    ("q", "quit"),
-                ]
-            };
             let mut spans = vec![Span::raw(" ")];
-            for (k, d) in keys {
+            for (k, d) in hints(app) {
                 spans.push(Span::styled(k, key_style()));
                 spans.push(Span::styled(format!(" {d}  "), dim()));
             }
@@ -366,15 +439,6 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Paragraph::new(Line::styled(format!("{} ", SPIN[t % 4]), accent()).right_aligned()),
             area,
         );
-    } else if let Some(u) = &app.user {
-        let s = format!(
-            "{} credits · {} rewards ",
-            super::page::isep(u.cycles),
-            super::page::isep(u.rewards)
-        );
-        if app.status.is_none() && area.width as usize > 100 {
-            f.render_widget(Paragraph::new(Line::styled(s, dim()).right_aligned()), area);
-        }
     }
 }
 
@@ -619,7 +683,10 @@ fn draw_help(f: &mut Frame, area: Rect) {
             "open: post, user, realm, tag, notification, button",
         ),
         ("Esc  h", "back (to the sidebar on the first page)"),
-        ("[ ]", "switch tabs (feeds, profiles, realms, proposals)"),
+        (
+            "1-9  [ ]",
+            "switch tabs (realms, profiles, proposals); tabs are clickable",
+        ),
         ("s", "reload the page"),
         ("/", "search (in All realms: search realms)"),
         ("c  C", "new post / new poll (in the shown realm)"),

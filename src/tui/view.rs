@@ -6,35 +6,35 @@ use crate::api::{self, Item};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
+use std::rc::Rc;
 
-fn tabs(names: &[&str], cur: usize) -> Line<'static> {
-    let mut sp = vec![];
-    for (i, n) in names.iter().enumerate() {
-        let st = if i == cur {
-            Style::default()
-                .fg(ACCENT)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-        } else {
-            dim()
-        };
-        sp.push(Span::styled(n.to_string(), st));
-        sp.push(Span::raw("   "));
-    }
-    sp.push(Span::styled("[ ] switch", dim()));
-    Line::from(sp)
+/// Entries plus where the tab bar is (for mouse clicks).
+pub type Built = (Vec<Entry>, Option<(usize, Vec<(usize, usize)>)>);
+
+fn act(f: impl Fn(&mut App) + 'static) -> Action2 {
+    Rc::new(f)
 }
 
+fn more(o: &mut Out) {
+    o.entry(Entry {
+        lines: vec![Ln::Text(Line::styled("▸ load more", accent()))],
+        target: Some(Target::More),
+        key: "more".into(),
+    });
+}
+
+/// Posts separated by rules.
 fn posts(o: &mut Out, p: &Page) {
-    for it in &p.items {
-        o.e.push(post_entry(o.app, p, it, o.w, false, 0));
-        o.blank();
+    for (i, it) in p.items.iter().enumerate() {
+        if i > 0 {
+            o.rule();
+        }
+        let e = post_entry(o.app, p, it, o.w, false, 0);
+        o.entry(e);
     }
     if p.more {
-        o.e.push(Entry {
-            lines: vec![Ln::Text(Line::styled("▸ load more", accent()))],
-            target: Some(Target::More),
-            key: "more".into(),
-        });
+        o.rule();
+        more(o);
     }
     if p.items.is_empty() && p.data.loaded {
         o.text(Line::styled("nothing here", dim()));
@@ -49,24 +49,38 @@ fn tok(app: &App, v: u64) -> String {
     )
 }
 
-pub fn build(app: &App, p: &Page, w: usize) -> Vec<Entry> {
-    let mut o = Out {
-        e: Vec::new(),
-        w,
-        app,
-    };
+pub fn build(app: &App, p: &Page, w: usize) -> Built {
+    let mut o = Out::new(app, w);
     let o = &mut o;
     match &p.kind {
         Kind::Home | Kind::Hot | Kind::New | Kind::Bookmarks | Kind::Reposts(_) => posts(o, p),
         Kind::Tags(tags) => {
-            if let Some(u) = &app.user {
-                let following = u.feeds.iter().any(|f| f == tags);
-                o.note(if following {
-                    "following this feed · f: unfollow · M: mute tag"
-                } else {
-                    "f: follow this feed · M: mute tag"
-                });
-                o.blank();
+            if app.user.is_some() {
+                let following = app
+                    .user
+                    .as_ref()
+                    .is_some_and(|u| u.feeds.iter().any(|f| f == tags));
+                let tags2 = tags.clone();
+                let tag = tags.first().cloned().unwrap_or_default();
+                o.actions(
+                    "tags",
+                    vec![
+                        (
+                            if following {
+                                "unfollow feed (f)"
+                            } else {
+                                "follow feed (f)"
+                            }
+                            .into(),
+                            act(move |app| app.toggle_feed(tags2.clone())),
+                        ),
+                        (
+                            "mute tag (M)".into(),
+                            act(move |app| app.toggle_filter("tag", tag.clone())),
+                        ),
+                    ],
+                );
+                o.rule();
             }
             posts(o, p)
         }
@@ -74,27 +88,36 @@ pub fn build(app: &App, p: &Page, w: usize) -> Vec<Entry> {
         Kind::Realms => realms(o, p),
         Kind::User(_) => user(o, p),
         Kind::Journal(h) => {
-            if let Some(u) = &p.data.user {
-                o.text(Line::styled(format!("{}'s journal", u.name), head()));
-                if !u.about.is_empty() {
-                    o.md(&u.about);
+            match &p.data.user {
+                Some(u) => {
+                    o.heading(&format!("{}'s journal", u.name));
+                    if !u.about.is_empty() {
+                        o.md(&u.about);
+                    }
                 }
-                o.blank();
-            } else {
-                o.text(Line::styled(format!("{h}'s journal"), head()));
+                None => o.heading(&format!("{h}'s journal")),
             }
+            o.rule();
             posts(o, p)
         }
         Kind::Post(_) => thread(o, p),
         Kind::Inbox => inbox(o, p),
         Kind::Search(_) => search(o, p),
         Kind::Users(ids) => {
-            for id in ids {
-                o.user_link(*id, "");
-            }
+            let rows = ids
+                .iter()
+                .map(|id| {
+                    (
+                        format!("u:{id}"),
+                        vec![(format!("@{}", app.name(*id)), Style::default().fg(ACCENT))],
+                        Some(Target::UserId(*id)),
+                    )
+                })
+                .collect();
+            o.table(&[("user", false)], rows);
         }
         Kind::Proposals => {
-            o.text(tabs(
+            o.tab_bar(
                 &[
                     "All",
                     "Release",
@@ -104,9 +127,17 @@ pub fn build(app: &App, p: &Page, w: usize) -> Vec<Entry> {
                     "Rewards",
                 ],
                 p.tab,
-            ));
-            o.note("n: new proposal");
-            o.blank();
+            );
+            if app.user.is_some() {
+                o.actions(
+                    "prop",
+                    vec![(
+                        "new proposal (n)".into(),
+                        act(|app| app.new_proposal_menu()),
+                    )],
+                );
+            }
+            o.rule();
             posts(o, p)
         }
         Kind::Wallet => wallet(o, p),
@@ -115,22 +146,14 @@ pub fn build(app: &App, p: &Page, w: usize) -> Vec<Entry> {
         Kind::Welcome => welcome(o, p),
         Kind::Tokens => tokens(o, p),
         Kind::Transactions(owner, _) => {
-            o.text(Line::styled(
-                if owner.is_empty() {
-                    "All transactions".to_string()
-                } else {
-                    format!("Transactions of {owner}")
-                },
-                head(),
-            ));
-            o.blank();
-            txs(o, p, &p.data.txs);
+            o.heading(&if owner.is_empty() {
+                "All transactions".to_string()
+            } else {
+                format!("Transactions of {owner}")
+            });
+            txs(o, &p.data.txs);
             if p.more {
-                o.e.push(Entry {
-                    lines: vec![Ln::Text(Line::styled("▸ load more", accent()))],
-                    target: Some(Target::More),
-                    key: "more".into(),
-                });
+                more(o);
             }
         }
         Kind::Dashboard => dashboard(o, p),
@@ -147,25 +170,21 @@ pub fn build(app: &App, p: &Page, w: usize) -> Vec<Entry> {
             }
         }
     }
-    std::mem::take(&mut o.e)
+    let tabs = o.tabs.take();
+    (o.finish(), tabs)
 }
 
 fn realm(o: &mut Out, p: &Page, id: &str) {
     let app = o.app;
-    o.text(Line::styled(
-        format!("/{id}"),
-        Style::default().fg(WARN).add_modifier(Modifier::BOLD),
-    ));
+    o.heading(&format!("/{id}"));
     if let Some(r) = &p.data.realm {
         if !r.description.is_empty() {
-            let d = r
+            o.md(r
                 .description
                 .split(crate::markdown::CUT)
                 .next()
-                .unwrap_or("");
-            o.md(d);
+                .unwrap_or(""));
         }
-        o.blank();
         o.kv("Members", sep(r.num_members));
         o.kv("Posts", sep(r.num_posts));
         o.kv("Created", date(r.created));
@@ -175,12 +194,11 @@ fn realm(o: &mut Out, p: &Page, id: &str) {
             "Clean-up penalty",
             format!("{} credits", sep(r.cleanup_penalty)),
         );
-        if r.adult_content {
-            o.kv("Adult content", "yes");
-        }
-        if r.comments_filtering {
-            o.kv("Comments filtering", "on");
-        }
+        o.kv("Adult content", if r.adult_content { "yes" } else { "no" });
+        o.kv(
+            "Comments filtering",
+            if r.comments_filtering { "on" } else { "off" },
+        );
         let f = &r.filter;
         if f.age_days > 0 || f.safe || f.balance > 0 || f.num_followers > 0 {
             o.kv(
@@ -194,19 +212,18 @@ fn realm(o: &mut Out, p: &Page, id: &str) {
                 ),
             );
         }
-        if !r.whitelist.is_empty() {
-            o.kv("Whitelist", format!("{} users", r.whitelist.len()));
-        }
-        o.text(Line::styled("Controllers", dim()));
-        for c in &r.controllers {
-            o.user_link(*c, "");
-        }
-        if r.description.contains(crate::markdown::CUT) {
-            o.button("Realm rules / full description", "", {
-                let d = r.description.clone();
-                move |app: &mut App| app.text_popup("Realm description", &d)
-            });
-        }
+        o.users("ctl", "Controllers", &r.controllers, 2);
+        o.users("wl", "Whitelist", &r.whitelist, 2);
+    }
+    let mut acts: Vec<(String, Action2)> = vec![];
+    if let Some(r) = &p.data.realm
+        && r.description.contains(crate::markdown::CUT)
+    {
+        let d = r.description.clone();
+        acts.push((
+            "rules".into(),
+            act(move |app| app.text_popup("Realm description", &d)),
+        ));
     }
     if let Some(u) = &app.user {
         let member = u.realms.iter().any(|r| r == id);
@@ -215,75 +232,102 @@ fn realm(o: &mut Out, p: &Page, id: &str) {
             .realm
             .as_ref()
             .is_some_and(|r| r.controllers.contains(&u.id));
-        let mut hint = vec![
-            if member { "J: leave" } else { "J: join" },
-            "c: new post here",
-            "M: mute realm",
-        ];
+        let (a, b, c, d) = (
+            id.to_string(),
+            id.to_string(),
+            id.to_string(),
+            id.to_string(),
+        );
+        acts.push((
+            if member { "leave (J)" } else { "join (J)" }.into(),
+            act(move |app| app.toggle_membership(a.clone())),
+        ));
+        acts.push((
+            "new post here (c)".into(),
+            act(move |app| app.new_post(Some(b.clone()))),
+        ));
+        acts.push((
+            "mute (M)".into(),
+            act(move |app| app.toggle_filter("realm", c.clone())),
+        ));
         if ctl {
-            hint.push("E: edit realm");
+            acts.push((
+                "edit (E)".into(),
+                act(move |app| app.realm_form(Some(d.clone()))),
+            ));
         }
-        o.blank();
-        o.note(&hint.join(" · "));
     }
+    o.actions("realm", acts);
     o.blank();
-    o.text(tabs(&["New", "Hot"], p.tab));
-    o.blank();
+    o.tab_bar(&["New", "Hot"], p.tab);
+    o.rule();
     posts(o, p);
 }
 
 fn realms(o: &mut Out, p: &Page) {
-    o.text(tabs(&["Popularity", "Last update", "Name"], p.tab));
-    let mut note = "/: search realms".to_string();
+    o.tab_bar(&["Popularity", "Last update", "Name"], p.tab);
+    let mut acts: Vec<(String, Action2)> =
+        vec![("search (/)".into(), act(|app| app.realm_search_prompt()))];
     if !p.query.is_empty() {
-        note = format!("matching “{}” · Esc: all", p.query);
+        acts.push((
+            format!("show all, not only “{}” (Esc)", p.query),
+            act(|app| {
+                if let Some(p) = app.page() {
+                    p.query.clear();
+                }
+                app.reload();
+            }),
+        ));
     }
     if o.app.user.is_some() {
-        note += " · n: create a realm";
+        acts.push(("create a realm (n)".into(), act(|app| app.realm_form(None))));
     }
-    o.note(&note);
+    o.actions("realms", acts);
     o.blank();
     let me = o.app.user.as_ref();
-    for (id, r) in &p.data.realms {
-        let member = me.is_some_and(|u| u.realms.contains(id));
-        let desc = crate::markdown::first_line(&r.description);
-        let mut l1 = vec![Span::styled(
-            format!("/{id}"),
-            Style::default().fg(WARN).add_modifier(Modifier::BOLD),
-        )];
-        if member {
-            l1.push(Span::styled("  member", Style::default().fg(GOOD)));
-        }
-        l1.push(Span::styled(
-            format!(
-                "  {} members · {} posts · {}",
-                sep(r.num_members),
-                sep(r.num_posts),
-                ago(r.last_update)
-            ),
-            dim(),
-        ));
-        let l2 = Line::raw(format!("  {}", fit(&desc, o.w.saturating_sub(2))));
-        o.rows(
-            format!("r:{id}"),
-            vec![Line::from(l1), l2],
-            Target::Realm(id.clone()),
-        );
-    }
+    let rows = p
+        .data
+        .realms
+        .iter()
+        .map(|(id, r)| {
+            let member = me.is_some_and(|u| u.realms.contains(id));
+            (
+                format!("r:{id}"),
+                vec![
+                    (
+                        format!("/{id}"),
+                        Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+                    ),
+                    (
+                        if member { "✓".into() } else { String::new() },
+                        Style::default().fg(GOOD),
+                    ),
+                    (sep(r.num_members), Style::default()),
+                    (sep(r.num_posts), Style::default()),
+                    (ago(r.last_update), dim()),
+                    (
+                        crate::markdown::first_line(&r.description),
+                        Style::default(),
+                    ),
+                ],
+                Some(Target::Realm(id.clone())),
+            )
+        })
+        .collect();
+    o.table(
+        &[
+            ("realm", false),
+            ("", false),
+            ("members", true),
+            ("posts", true),
+            ("updated", true),
+            ("description", false),
+        ],
+        rows,
+    );
     if p.more {
-        o.e.push(Entry {
-            lines: vec![Ln::Text(Line::styled("▸ load more", accent()))],
-            target: Some(Target::More),
-            key: "more".into(),
-        });
+        more(o);
     }
-}
-
-pub fn fit(s: &str, w: usize) -> String {
-    if s.chars().count() <= w {
-        return s.to_string();
-    }
-    s.chars().take(w.saturating_sub(1)).collect::<String>() + "…"
 }
 
 fn user(o: &mut Out, p: &Page) {
@@ -293,25 +337,22 @@ fn user(o: &mut Out, p: &Page) {
         return;
     };
     let mut l = vec![Span::styled(format!("@{}", u.name), accent())];
-    if u.stalwart {
-        l.push(Span::styled("  Stalwart", Style::default().fg(BAD)));
-    }
-    if u.deactivated {
-        l.push(Span::styled("  deactivated", dim()));
-    }
-    // labels as on the web profile
+    let mut label = |t: &str, st: Style| l.push(Span::styled(format!("  {t}"), st));
     if u.timestamp < 1_672_500_000_000_000_000 {
-        l.push(Span::styled("  OG", Style::default().fg(WARN)));
+        label("OG", Style::default().fg(WARN));
+    }
+    if u.stalwart {
+        label("Stalwart", Style::default().fg(BAD));
     }
     if u.active_weeks > 12 {
-        l.push(Span::styled("  Frequenter", Style::default().fg(HEAD)));
+        label("Frequenter", Style::default().fg(HEAD));
     }
     if app
         .user
         .as_ref()
         .is_some_and(|me| me.id != u.id && u.followees.contains(&me.id))
     {
-        l.push(Span::styled("  Follows you", Style::default().fg(GOOD)));
+        label("Follows you", Style::default().fg(GOOD));
     }
     let weeks = app
         .backend
@@ -320,7 +361,10 @@ fn user(o: &mut Out, p: &Page) {
         .and_then(|v| v.as_u64())
         .unwrap_or(4);
     if now_ns().saturating_sub(u.last_activity) / 86_400_000_000_000 > weeks * 7 {
-        l.push(Span::styled("  Inactive", dim()));
+        label("Inactive", dim());
+    }
+    if u.deactivated {
+        label("deactivated", dim());
     }
     o.text(Line::from(l));
     if !u.previous_names.is_empty() {
@@ -332,20 +376,42 @@ fn user(o: &mut Out, p: &Page) {
     if let Some(r) = &u.report
         && !r.closed
     {
-        o.blank();
-        o.text(Line::styled(
+        let mut inner = vec![Ln::Text(Line::styled(
             "This user was REPORTED.",
             Style::default().fg(BAD).add_modifier(Modifier::BOLD),
+        ))];
+        inner.extend(blocks(
+            app,
+            crate::markdown::render(&r.reason, o.w.saturating_sub(4)).blocks,
+            o.w,
         ));
-        o.md(&r.reason);
-        o.note(&format!(
-            "reporter @{} · confirmed by {} · rejected by {}",
-            app.name(r.reporter),
-            r.confirmed_by.len(),
-            r.rejected_by.len()
-        ));
+        inner.push(Ln::Text(Line::styled(
+            format!(
+                "reporter @{} · confirmed by {} · rejected by {}",
+                app.name(r.reporter),
+                r.confirmed_by.len(),
+                r.rejected_by.len()
+            ),
+            dim(),
+        )));
+        let lines = boxed("report", inner, o.w, Style::default().fg(BAD));
+        o.entry(Entry {
+            lines,
+            target: None,
+            key: String::new(),
+        });
         if app.user.as_ref().is_some_and(|me| me.stalwart) {
-            o.note("Stalwarts: A agree (confirm) · Z disagree (reject)");
+            let (a, b) = (u.id, u.id);
+            o.actions(
+                "report",
+                vec![
+                    ("agree (A)".into(), act(move |app| app.vote_report(a, true))),
+                    (
+                        "disagree (Z)".into(),
+                        act(move |app| app.vote_report(b, false)),
+                    ),
+                ],
+            );
         }
     }
     if let Some(me) = &app.user
@@ -373,12 +439,10 @@ fn user(o: &mut Out, p: &Page) {
     if let Some(pgp) = u.settings.get("pgp").filter(|s| !s.is_empty()) {
         o.kv(
             "PGP key",
-            fit(
-                pgp.lines()
-                    .find(|l| !l.starts_with("-----") && !l.is_empty())
-                    .unwrap_or(pgp),
-                40,
-            ),
+            pgp.lines()
+                .find(|l| !l.starts_with("-----") && !l.is_empty())
+                .unwrap_or(pgp)
+                .to_string(),
         );
     }
     if !u.feeds.is_empty() {
@@ -392,13 +456,12 @@ fn user(o: &mut Out, p: &Page) {
                     .join("+")
             })
             .collect();
-        o.kv("Follows feeds", f.join(", "));
+        o.kv("Follows feeds", f.join(" "));
     }
-    let realms = u.realms.clone();
-    if !realms.is_empty() {
+    if !u.realms.is_empty() {
         o.kv(
             "Realms",
-            realms
+            u.realms
                 .iter()
                 .map(|r| format!("/{r}"))
                 .collect::<Vec<_>>()
@@ -415,59 +478,29 @@ fn user(o: &mut Out, p: &Page) {
                 .join(" "),
         );
     }
-    o.row(
-        "follows",
-        Line::from(vec![
-            Span::styled(format!("{:<26}", "Follows"), dim()),
-            Span::styled(format!("{} users ▸", u.followees.len()), accent()),
-        ]),
-        Target::Page(
-            Kind::Users(u.followees.clone()),
-            format!("@{} follows", u.name),
-        ),
-    );
-    o.row(
-        "followers",
-        Line::from(vec![
-            Span::styled(format!("{:<26}", "Followers"), dim()),
-            Span::styled(format!("{} users ▸", u.followers.len()), accent()),
-        ]),
-        Target::Page(
-            Kind::Users(u.followers.clone()),
-            format!("followers of @{}", u.name),
-        ),
-    );
-    o.row(
-        "txs",
-        Line::from(vec![
-            Span::styled(format!("{:<26}", "Transactions"), dim()),
-            Span::styled("▸", accent()),
-        ]),
-        Target::Page(
-            Kind::Transactions(u.principal.clone(), String::new()),
-            format!("@{} transactions", u.name),
-        ),
-    );
-    o.row(
-        "journal",
-        Line::from(vec![
-            Span::styled(format!("{:<26}", "Journal"), dim()),
-            Span::styled("▸", accent()),
-        ]),
-        Target::Page(
-            Kind::Journal(u.name.clone()),
-            format!("{}'s journal", u.name),
-        ),
-    );
+    o.users("follows", "Follows", &u.followees, 2);
+    o.users("followers", "Followers", &u.followers, 2);
+    let mut acts: Vec<(String, Action2)> = vec![];
+    let (principal, name) = (u.principal.clone(), u.name.clone());
+    acts.push((
+        "transactions".into(),
+        act(move |app| {
+            app.push(
+                Kind::Transactions(principal.clone(), String::new()),
+                &format!("@{name} transactions"),
+            )
+        }),
+    ));
+    let name = u.name.clone();
+    acts.push((
+        "journal".into(),
+        act(move |app| app.push(Kind::Journal(name.clone()), &format!("{name}'s journal"))),
+    ));
     if !u.accounting.is_empty() {
         let acc = u.accounting.clone();
-        o.row(
-            "accounting",
-            Line::from(vec![
-                Span::styled(format!("{:<26}", "Accounting"), dim()),
-                Span::styled(format!("{} entries ▸", acc.len()), accent()),
-            ]),
-            run(move |app: &mut App| {
+        acts.push((
+            format!("accounting ({})", acc.len()),
+            act(move |app| {
                 let mut md = String::from("| when | type | delta | log |\n|-|-|-:|-|\n");
                 for (t, kind, d, log) in &acc {
                     md += &format!(
@@ -480,26 +513,88 @@ fn user(o: &mut Out, p: &Page) {
                 }
                 app.text_popup("Rewards and credits accounting", &md);
             }),
-        );
+        ));
     }
     if let Some(me) = &app.user
         && me.id != u.id
     {
-        let follows = me.followees.contains(&u.id);
-        let muted = me.filters.users.contains(&u.id);
-        let blocked = me.blacklist.contains(&u.id);
-        o.blank();
-        o.note(&format!(
-            "f: {} · M: {} · B: {} · $: send credits · !: report",
-            if follows { "unfollow" } else { "follow" },
-            if muted { "unmute" } else { "mute" },
-            if blocked { "unblock" } else { "block" },
+        let id = u.id;
+        let follows = me.followees.contains(&id);
+        let muted = me.filters.users.contains(&id);
+        let blocked = me.blacklist.contains(&id);
+        acts.push((
+            if follows {
+                "unfollow (f)"
+            } else {
+                "follow (f)"
+            }
+            .into(),
+            act(move |app| app.toggle_follow(id)),
+        ));
+        acts.push((
+            if muted { "unmute (M)" } else { "mute (M)" }.into(),
+            act(move |app| app.toggle_filter("user", id.to_string())),
+        ));
+        acts.push((
+            if blocked { "unblock (B)" } else { "block (B)" }.into(),
+            act(move |app| app.toggle_block(id)),
+        ));
+        acts.push((
+            "send credits ($)".into(),
+            act(move |app| app.send_credits_form(id)),
+        ));
+        acts.push(("report (!)".into(), act(move |app| app.report_form(id))));
+    }
+    o.actions("user", acts);
+    o.blank();
+    o.tab_bar(&["Posts", "Mentions", "Rewarded"], p.tab);
+    o.rule();
+    posts(o, p);
+}
+
+fn post_actions(o: &mut Out, it: &Item) {
+    let app = o.app;
+    let id = it.post.id;
+    let mine = it.post.user == app.me();
+    let mut a: Vec<(String, Action2)> = vec![];
+    if app.user.is_some() {
+        a.push(("reply (r)".into(), act(move |app| app.reply(id))));
+        a.push(("react (+)".into(), act(move |app| app.react_menu(id))));
+        let bm = app.user.as_ref().is_some_and(|u| u.bookmarks.contains(&id));
+        a.push((
+            if bm { "unbookmark (b)" } else { "bookmark (b)" }.into(),
+            act(move |app| app.toggle_bookmark(id)),
+        ));
+        let w = it.post.watchers.contains(&app.me());
+        a.push((
+            if w { "unwatch (w)" } else { "watch (w)" }.into(),
+            act(move |app| app.toggle_watch(id)),
+        ));
+        a.push(("repost (P)".into(), act(move |app| app.repost(id))));
+        if it.post.poll().is_some() {
+            a.push(("vote (v)".into(), act(move |app| app.poll_vote(id))));
+        }
+        if mine {
+            a.push(("edit (e)".into(), act(move |app| app.edit_post(id))));
+            a.push(("pin (p)".into(), act(move |app| app.toggle_pin(id))));
+            a.push(("delete (D)".into(), act(move |app| app.delete_post(id))));
+        } else {
+            a.push(("tip (t)".into(), act(move |app| app.tip_form(id))));
+            a.push(("hide (H)".into(), act(move |app| app.toggle_hide(id))));
+        }
+    }
+    if !it.post.files.is_empty() {
+        a.push((
+            "pictures (I)".into(),
+            act(move |app| app.toggle_pictures(id)),
         ));
     }
-    o.blank();
-    o.text(tabs(&["Posts", "Mentions", "Rewarded"], p.tab));
-    o.blank();
-    posts(o, p);
+    a.push(("links (o)".into(), act(move |app| app.links_menu(id))));
+    a.push((
+        "info & versions (i)".into(),
+        act(move |app| app.post_info(id)),
+    ));
+    o.actions(&format!("post{id}"), a);
 }
 
 fn thread(o: &mut Out, p: &Page) {
@@ -522,37 +617,34 @@ fn thread(o: &mut Out, p: &Page) {
         return;
     };
     if !p.data.parents.is_empty() {
-        o.blank();
+        o.rule();
     }
-    o.e.push(post_entry(app, p, main, o.w, true, 0));
-    post_footer(o, p, main);
+    let e = post_entry(app, p, main, o.w, true, 0);
+    o.entry(e);
+    post_footer(o, main);
+    post_actions(o, main);
     if !p.data.json.is_null() {
         proposal(o, &p.data.json);
     }
-    if p.items.len() > 1 {
-        o.blank();
-        let n = p.items.len() - 1;
-        o.text(Line::styled(
-            format!("{n} comment{}", if n == 1 { "" } else { "s" }),
-            head(),
-        ));
+    let n = p.items.len() - 1;
+    if n > 0 {
+        o.heading(&format!("{n} comment{}", if n == 1 { "" } else { "s" }));
     }
     for it in p.items.iter().skip(1) {
-        let d = p.data.depth.get(&it.post.id).copied().unwrap_or(1);
-        o.blank();
-        o.e.push(post_entry(app, p, it, o.w, true, d.min(8)));
+        let d = p.data.depth.get(&it.post.id).copied().unwrap_or(1).min(8);
+        // a guide line between comments keeps the tree readable
+        o.text(Line::styled("│ ".repeat(d.saturating_sub(1)), dim()));
+        let e = post_entry(app, p, it, o.w, true, d.saturating_sub(1));
+        o.entry(e);
     }
 }
 
-fn post_footer(o: &mut Out, _p: &Page, it: &Item) {
+fn post_footer(o: &mut Out, it: &Item) {
     let app = o.app;
     let post = &it.post;
     let mut info = vec![datetime(post.timestamp)];
     if !post.patches.is_empty() {
-        info.push(format!("{} versions (i)", post.patches.len() + 1));
-    }
-    if !post.reposts.is_empty() {
-        info.push(format!("{} reposts", post.reposts.len()));
+        info.push(format!("{} versions", post.patches.len() + 1));
     }
     if !post.tips.is_empty() {
         let total: u64 = post.tips.iter().map(|t| t.1).sum();
@@ -566,30 +658,12 @@ fn post_footer(o: &mut Out, _p: &Page, it: &Item) {
             Target::Page(Kind::Reposts(post.id), format!("reposts of #{}", post.id)),
         );
     }
-    let mut keys = vec![
-        "r: reply",
-        "+: react",
-        "b: bookmark",
-        "w: watch",
-        "P: repost",
-        "o: links",
-        "i: info",
-    ];
-    if post.user == app.me() {
-        keys.extend(["e: edit", "D: delete", "p: pin"]);
-    } else {
-        keys.push("t: tip");
-    }
-    if app.user.is_some() {
-        o.note(&keys.join(" · "));
-    }
 }
 
 fn proposal(o: &mut Out, pr: &Value) {
     let app = o.app;
     let dec = app.backend.token_decimals;
-    o.blank();
-    o.text(Line::styled(format!("Proposal #{}", pr["id"]), head()));
+    o.heading(&format!("Proposal #{}", pr["id"]));
     let status = pr["status"].as_str().unwrap_or("?").to_string();
     o.kv("Status", status.clone());
     o.kv(
@@ -629,18 +703,17 @@ fn proposal(o: &mut Out, pr: &Value) {
         }
     }
     let vp = pr["voting_power"].as_u64().unwrap_or(0).max(1);
-    let (mut yes, mut no) = (0u64, 0u64);
-    let mut voted = false;
-    if let Some(b) = pr["bulletins"].as_array() {
-        for v in b {
-            if v[0].as_u64() == Some(app.me()) {
-                voted = true;
-            }
-            if v[1].as_bool() == Some(true) {
-                yes += v[2].as_u64().unwrap_or(0);
-            } else {
-                no += v[2].as_u64().unwrap_or(0);
-            }
+    let (mut yes, mut no, mut voted) = (0u64, 0u64, false);
+    let (mut yes_ids, mut no_ids) = (vec![], vec![]);
+    for v in pr["bulletins"].as_array().into_iter().flatten() {
+        let uid = v[0].as_u64().unwrap_or(0);
+        voted |= uid == app.me();
+        if v[1].as_bool() == Some(true) {
+            yes += v[2].as_u64().unwrap_or(0);
+            yes_ids.push(uid);
+        } else {
+            no += v[2].as_u64().unwrap_or(0);
+            no_ids.push(uid);
         }
     }
     o.kv("Voting power", amount(vp, dec));
@@ -652,36 +725,18 @@ fn proposal(o: &mut Out, pr: &Value) {
         "Rejected",
         format!("{} ({}%)", amount(no, dec), no * 100 / vp),
     );
-    if let Some(b) = pr["bulletins"].as_array() {
-        let names: Vec<String> = b
-            .iter()
-            .map(|v| {
-                format!(
-                    "{}@{}",
-                    if v[1].as_bool() == Some(true) {
-                        "✓"
-                    } else {
-                        "✗"
-                    },
-                    app.name(v[0].as_u64().unwrap_or(0))
-                )
-            })
-            .collect();
-        if !names.is_empty() {
-            o.note(&names.join(" "));
-        }
-    }
+    o.users("yes", "✓ accepted by", &yes_ids, 3);
+    o.users("no", "✗ rejected by", &no_ids, 3);
     if status == "Open" && app.user.is_some() {
-        let mut k = vec![];
+        let mut a: Vec<(String, Action2)> = vec![];
         if !voted {
-            k.push("A: accept · Z: reject");
+            a.push(("accept (A)".into(), act(|app| app.vote_proposal(true))));
+            a.push(("reject (Z)".into(), act(|app| app.vote_proposal(false))));
         }
         if pr["proposer"].as_u64() == Some(app.me()) {
-            k.push("X: cancel proposal");
+            a.push(("cancel (X)".into(), act(|app| app.cancel_proposal())));
         }
-        if !k.is_empty() {
-            o.note(&k.join(" · "));
-        }
+        o.actions("proposal", a);
     }
 }
 
@@ -700,28 +755,48 @@ fn inbox(o: &mut Out, p: &Page) {
         .filter(|(_, (_, read))| *read)
         .collect();
     old.reverse();
-    o.note("Enter: open · d: dismiss · D: clear all · w: unwatch post");
-    o.blank();
+    o.actions(
+        "inbox",
+        vec![
+            (
+                "clear all (D)".into(),
+                act(|app| {
+                    let ids: Vec<u64> = app
+                        .user
+                        .as_ref()
+                        .map(|u| u.notifications.keys().copied().collect())
+                        .unwrap_or_default();
+                    app.confirm("Clear all notifications?", move |app| {
+                        app.dismiss(ids.clone(), true)
+                    });
+                }),
+            ),
+            (
+                if p.tab == 0 {
+                    format!("show archive ({})", old.len())
+                } else {
+                    "hide archive".into()
+                },
+                act(|app| {
+                    if let Some(p) = app.page() {
+                        p.tab = 1 - p.tab.min(1);
+                        p.dirty();
+                    }
+                }),
+            ),
+        ],
+    );
+    o.rule();
     if fresh.is_empty() {
         o.text(Line::styled("Inbox zero achieved! 🚀", head()));
     }
-    for (title, list, archived) in [("", fresh, false), ("Archive", old, true)] {
-        if !title.is_empty() && !list.is_empty() {
-            if p.tab == 0 {
-                o.blank();
-                o.button(
-                    "Show archive",
-                    &format!("{} entries", list.len()),
-                    |app: &mut App| {
-                        if let Some(p) = app.page() {
-                            p.tab = 1;
-                            p.dirty();
-                        }
-                    },
-                );
-                continue;
-            }
-            o.heading(title);
+    let mut lists = vec![(fresh, false)];
+    if p.tab == 1 {
+        lists.push((old, true));
+    }
+    for (list, archived) in lists {
+        if archived && !list.is_empty() {
+            o.heading("Archive");
         }
         for (id, (n, _)) in list {
             let (msg, post) = match n {
@@ -747,80 +822,72 @@ fn inbox(o: &mut Out, p: &Page) {
                 ),
             };
             let r = crate::markdown::render(&msg, o.w.saturating_sub(2));
-            let mut lines: Vec<Ln> = blocks(app, r.blocks, o.w)
-                .into_iter()
-                .enumerate()
-                .map(|(i, l)| match l {
-                    Ln::Text(t) => {
-                        let mut sp = vec![Span::styled(
-                            if archived || i > 0 { "  " } else { "● " },
-                            Style::default().fg(WARN),
-                        )];
-                        sp.extend(t.spans);
-                        Ln::Text(Line::from(sp))
-                    }
-                    x => x,
-                })
-                .collect();
+            let mut lines = indent(blocks(app, r.blocks, o.w), &[Span::raw("  ")]);
+            if !archived && let Some(Ln::Text(l)) = lines.first_mut() {
+                l.spans[0] = Span::styled("● ", Style::default().fg(WARN));
+            }
             if let Some(pid) = post
                 && let Some(it) = p.items.iter().find(|i| i.post.id == pid)
             {
                 let e = post_entry(app, p, it, o.w.saturating_sub(4), false, 0);
-                for l in e.lines.into_iter().take(6) {
-                    if let Ln::Text(t) = l {
-                        let mut sp = vec![Span::styled("  │ ", dim())];
-                        sp.extend(t.spans);
-                        lines.push(Ln::Text(Line::from(sp)));
-                    }
-                }
+                let inner: Vec<Ln> = e.lines.into_iter().take(6).collect();
+                lines.extend(indent(inner, &[Span::raw("  "), Span::styled("▏ ", dim())]));
             }
-            o.e.push(Entry {
+            o.entry(Entry {
                 lines,
                 target: Some(Target::Notification(*id)),
                 key: format!("n:{id}"),
             });
-            o.blank();
+            o.rule();
         }
     }
 }
 
 fn search(o: &mut Out, p: &Page) {
-    o.note("/: new search · terms: @user, #tag, /realm, text");
+    o.actions(
+        "search",
+        vec![("new search (/)".into(), act(|app| app.search_prompt()))],
+    );
+    o.note("Terms: @user, #tag, /realm or words.");
     if !p.query.is_empty() {
-        o.text(Line::styled(format!("Results for “{}”", p.query), head()));
+        o.heading(&format!("Results for “{}”", p.query));
     }
-    o.blank();
-    for r in &p.data.results {
-        let (label, t) = match r.result.as_str() {
-            "user" => (format!("@{}", o.app.name(r.id)), Target::UserId(r.id)),
-            "tag" => (format!("#{}", r.relevant), Target::Tag(r.relevant.clone())),
-            "realm" => (
-                format!("/{}", r.generic_id),
-                Target::Realm(r.generic_id.clone()),
-            ),
-            _ => (
-                format!("post #{} by @{}", r.id, o.app.name(r.user_id)),
-                Target::Post(r.id),
-            ),
-        };
-        let rel = if r.result == "tag" {
-            String::new()
-        } else {
-            r.relevant.replace('\n', " ")
-        };
-        o.rows(
-            format!("s:{}:{}:{}", r.result, r.id, r.generic_id),
-            vec![
-                Line::from(vec![
-                    Span::styled(label, accent()),
-                    Span::styled(format!("  {}", r.result), dim()),
-                ]),
-                Line::raw(format!("  {}", fit(&rel, o.w.saturating_sub(2)))),
-            ],
-            t,
-        );
-    }
-    if p.data.results.is_empty() && p.data.loaded {
+    let rows = p
+        .data
+        .results
+        .iter()
+        .map(|r| {
+            let (label, t) = match r.result.as_str() {
+                "user" => (format!("@{}", o.app.name(r.id)), Target::UserId(r.id)),
+                "tag" => (format!("#{}", r.relevant), Target::Tag(r.relevant.clone())),
+                "realm" => (
+                    format!("/{}", r.generic_id),
+                    Target::Realm(r.generic_id.clone()),
+                ),
+                _ => (
+                    format!("#{} @{}", r.id, o.app.name(r.user_id)),
+                    Target::Post(r.id),
+                ),
+            };
+            let rel = if r.result == "tag" {
+                String::new()
+            } else {
+                r.relevant.replace('\n', " ")
+            };
+            (
+                format!("s:{}:{}:{}", r.result, r.id, r.generic_id),
+                vec![
+                    (r.result.clone(), dim()),
+                    (label, accent()),
+                    (rel, Style::default()),
+                ],
+                Some(t),
+            )
+        })
+        .collect();
+    if !p.data.results.is_empty() {
+        o.table(&[("kind", false), ("match", false), ("", false)], rows);
+    } else if p.data.loaded {
         o.text(Line::styled("no results", dim()));
     }
 }
@@ -828,13 +895,11 @@ fn search(o: &mut Out, p: &Page) {
 fn wallet(o: &mut Out, p: &Page) {
     let app = o.app;
     let Some(u) = &app.user else { return };
-    let dec = app.backend.token_decimals;
     if u.cycles <= 200 {
         o.text(Line::styled(
             "You are low on credits! Transfer ICP to your account below and mint credits.",
             Style::default().fg(WARN),
         ));
-        o.blank();
     }
     o.kv("Principal", u.principal.clone());
     o.kv("ICP account", u.account.clone());
@@ -851,84 +916,90 @@ fn wallet(o: &mut Out, p: &Page) {
     if u.treasury_e8s > 0 {
         o.kv("Treasury", format!("{} ICP", icp(u.treasury_e8s)));
     }
-    o.button("Send ICP", "to an account id", |app: &mut App| {
-        app.send_icp_form()
-    });
-    o.button(
-        "Withdraw rewards",
-        "converts reward points to ICP",
-        |app: &mut App| app.withdraw_rewards(),
+    o.actions(
+        "icp",
+        vec![
+            ("send ICP".into(), act(|app| app.send_icp_form())),
+            ("withdraw rewards".into(), act(|app| app.withdraw_rewards())),
+        ],
     );
     o.heading("Credits");
     o.kv("Available", isep(u.cycles));
-    o.button(
-        "Mint credits",
-        "pays ICP from the balance above",
-        |app: &mut App| app.mint_credits_form(),
+    o.actions(
+        "credits",
+        vec![("mint credits".into(), act(|app| app.mint_credits_form()))],
     );
     o.heading(&app.backend.token_symbol.clone());
     o.kv("Wallet", tok(app, u.balance));
     if let Some(c) = &u.cold_wallet {
         o.kv("Cold wallet", format!("{} ({c})", tok(app, u.cold_balance)));
     }
-    o.button("Send tokens", "", |app: &mut App| {
-        let sym = app.backend.token_symbol.clone();
-        let (dec, fee) = (app.backend.token_decimals, app.backend.transaction_fee);
-        let c = app.cfg.canister.clone();
-        app.send_tokens_form(c, sym, dec, fee);
-    });
-    o.row(
-        "txs",
-        Line::styled("▸ Transactions", accent()),
-        Target::Page(
-            Kind::Transactions(u.principal.clone(), String::new()),
-            "My transactions".into(),
+    let principal = u.principal.clone();
+    let mut a: Vec<(String, Action2)> = vec![
+        (
+            "send tokens".into(),
+            act(|app| {
+                let sym = app.backend.token_symbol.clone();
+                let (dec, fee) = (app.backend.token_decimals, app.backend.transaction_fee);
+                let c = app.cfg.canister.clone();
+                app.send_tokens_form(c, sym, dec, fee);
+            }),
         ),
-    );
+        (
+            "transactions".into(),
+            act(move |app| {
+                app.push(
+                    Kind::Transactions(principal.clone(), String::new()),
+                    "My transactions",
+                )
+            }),
+        ),
+    ];
     if u.cold_wallet.is_some() {
-        o.button(
-            "Unlink cold wallet",
-            "reduces voting power",
-            |app: &mut App| app.unlink_cold_wallet(),
-        );
-    } else {
+        a.push((
+            "unlink cold wallet".into(),
+            act(|app| app.unlink_cold_wallet()),
+        ));
+    }
+    o.actions("tokens", a);
+    if u.cold_wallet.is_none() {
         o.note("Linking a cold wallet needs the Plug browser extension: use the web app.");
     }
-    if u.settings
-        .get("icrcWallet")
-        .map(|s| s == "true")
-        .unwrap_or(false)
-    {
+    if u.settings.get("icrcWallet").is_some_and(|s| s == "true") {
         o.heading("ICRC tokens");
-        for (c, sym, d, fee, bal) in &p.data.tokens {
-            let (c2, sym2, d2, fee2, c3) = (c.clone(), sym.clone(), *d, *fee, c.clone());
-            o.row(
-                format!("tok:{c}"),
-                Line::from(vec![
-                    Span::styled(format!("{sym:<10}"), accent()),
-                    Span::raw(format!("{:>20}", amount(*bal, *d))),
-                    Span::styled(format!("  {c}"), dim()),
-                ]),
-                run(move |app: &mut App| {
-                    app.popup = Some(super::Popup::Menu(
-                        super::Menu::new(sym2.clone())
-                            .add("Send", {
-                                let (c2, sym2) = (c2.clone(), sym2.clone());
-                                move |app| app.send_tokens_form(c2.clone(), sym2.clone(), d2, fee2)
-                            })
-                            .add("Remove from wallet", {
-                                let c3 = c3.clone();
-                                move |app| app.remove_wallet_token(c3)
-                            }),
-                    ))
-                }),
-            );
-        }
-        o.button("Add token", "by ledger canister id", |app: &mut App| {
-            app.add_wallet_token_form()
-        });
+        let rows = p
+            .data
+            .tokens
+            .iter()
+            .map(|(c, sym, d, fee, bal)| {
+                let (c2, sym2, d2, fee2, c3) = (c.clone(), sym.clone(), *d, *fee, c.clone());
+                (
+                    format!("tok:{c}"),
+                    vec![
+                        (sym.clone(), accent()),
+                        (amount(*bal, *d), Style::default()),
+                        (c.clone(), dim()),
+                    ],
+                    Some(run(move |app: &mut App| {
+                        let (c2, sym2, c3) = (c2.clone(), sym2.clone(), c3.clone());
+                        app.popup = Some(super::Popup::Menu(
+                            super::Menu::new(sym2.clone())
+                                .add("Send", move |app| app.send_tokens_form(c2, sym2, d2, fee2))
+                                .add("Remove from wallet", move |app| app.remove_wallet_token(c3)),
+                        ))
+                    })),
+                )
+            })
+            .collect();
+        o.table(
+            &[("token", false), ("balance", true), ("ledger", false)],
+            rows,
+        );
+        o.actions(
+            "icrc",
+            vec![("add token".into(), act(|app| app.add_wallet_token_form()))],
+        );
     }
-    let _ = dec;
 }
 
 fn invites(o: &mut Out, p: &Page) {
@@ -937,44 +1008,58 @@ fn invites(o: &mut Out, p: &Page) {
         "Invite people by giving them a code; the credits you put in are transferred to each new user (at least {} credits needed).",
         app.backend.min_credits_for_inviting
     ));
-    o.button("Create invite", "", |app: &mut App| app.invite_form(None));
+    o.actions(
+        "inv",
+        vec![("create invite".into(), act(|app| app.invite_form(None)))],
+    );
     o.heading("Your invites");
     if p.data.invites.is_empty() && p.data.loaded {
         o.text(Line::styled("none", dim()));
+        return;
     }
-    for (code, inv) in &p.data.invites {
-        let mut l = vec![
-            Span::styled(code.clone(), accent()),
-            Span::raw(format!(
-                "  {} credits left, {} per user",
-                isep(inv.credits),
-                isep(inv.credits_per_user)
-            )),
-        ];
-        if let Some(r) = &inv.realm_id {
-            l.push(Span::styled(format!("  /{r}"), Style::default().fg(WARN)));
-        }
-        let joined: Vec<String> = inv
-            .joined_user_ids
-            .iter()
-            .map(|i| format!("@{}", app.name(*i)))
-            .collect();
-        let mut lines = vec![Line::from(l)];
-        lines.push(Line::styled(
-            format!("  {}", app.web_url(&format!("welcome/{code}"))),
-            dim(),
-        ));
-        if !joined.is_empty() {
-            lines.push(Line::styled(
-                format!("  joined: {}", joined.join(" ")),
-                dim(),
-            ));
-        }
-        o.rows(format!("inv:{code}"), lines, Target::Invite(code.clone()));
-    }
-    if !p.data.invites.is_empty() {
-        o.note("Enter: edit the selected invite");
-    }
+    let rows = p
+        .data
+        .invites
+        .iter()
+        .map(|(code, inv)| {
+            let joined: Vec<String> = inv
+                .joined_user_ids
+                .iter()
+                .map(|i| format!("@{}", app.name(*i)))
+                .collect();
+            (
+                format!("inv:{code}"),
+                vec![
+                    (code.clone(), accent()),
+                    (isep(inv.credits), Style::default()),
+                    (isep(inv.credits_per_user), Style::default()),
+                    (
+                        inv.realm_id
+                            .clone()
+                            .map(|r| format!("/{r}"))
+                            .unwrap_or_default(),
+                        Style::default().fg(WARN),
+                    ),
+                    (joined.join(" "), dim()),
+                ],
+                Some(Target::Invite(code.clone())),
+            )
+        })
+        .collect();
+    o.table(
+        &[
+            ("code", false),
+            ("credits left", true),
+            ("per user", true),
+            ("realm", false),
+            ("joined", false),
+        ],
+        rows,
+    );
+    o.note(&format!(
+        "Enter edits an invite. Invite links: {}",
+        app.web_url("welcome/<code>")
+    ));
 }
 
 fn settings(o: &mut Out, p: &Page) {
@@ -982,7 +1067,6 @@ fn settings(o: &mut Out, p: &Page) {
     let Some(u) = &app.user else { return };
     o.heading("Profile");
     o.kv("Name", u.name.clone());
-    o.kv("About", fit(&u.about, o.w.saturating_sub(24)));
     o.kv("Usage mode", u.mode.clone());
     o.kv("Governance", if u.governance { "yes" } else { "no" });
     o.kv(
@@ -1000,7 +1084,11 @@ fn settings(o: &mut Out, p: &Page) {
             .cloned()
             .unwrap_or("false".into()),
     );
-    o.button("Edit profile", "", |app: &mut App| app.profile_form());
+    o.kv("About", u.about.clone());
+    o.actions(
+        "profile",
+        vec![("edit profile".into(), act(|app| app.profile_form()))],
+    );
     o.heading("Noise filter");
     o.note("Posts and comments from users not passing this filter are hidden from you, and they cannot reply to your posts.");
     let f = &u.filters.noise;
@@ -1012,14 +1100,17 @@ fn settings(o: &mut Out, p: &Page) {
     o.kv("Min. followers", f.num_followers.to_string());
     o.kv("Non-controversial only", if f.safe { "yes" } else { "no" });
     o.kv(
-        "Followed in other realms",
+        "Followed, other realms",
         if u.show_posts_in_realms {
             "shown"
         } else {
             "hidden"
         },
     );
-    o.button("Edit filter", "", |app: &mut App| app.filter_form());
+    o.actions(
+        "filter",
+        vec![("edit filter".into(), act(|app| app.filter_form()))],
+    );
     let lists: [(&str, &'static str, Vec<String>); 4] = [
         (
             "Muted users",
@@ -1038,25 +1129,31 @@ fn settings(o: &mut Out, p: &Page) {
         if items.is_empty() {
             continue;
         }
-        o.heading(title);
-        for v in items {
-            let label = match kind {
-                "user" | "blacklist" => format!("@{}", app.name(v.parse().unwrap_or(0))),
-                "tag" => format!("#{v}"),
-                _ => format!("/{v}"),
-            };
-            o.row(
-                format!("{kind}:{v}"),
-                Line::from(vec![Span::raw(label), Span::styled("  x: remove", dim())]),
-                Target::Listed(kind, v),
-            );
-        }
+        o.heading(&format!("{title} · x: remove"));
+        let rows = items
+            .into_iter()
+            .map(|v| {
+                let label = match kind {
+                    "user" | "blacklist" => format!("@{}", app.name(v.parse().unwrap_or(0))),
+                    "tag" => format!("#{v}"),
+                    _ => format!("/{v}"),
+                };
+                (
+                    format!("{kind}:{v}"),
+                    vec![(label, Style::default())],
+                    Some(Target::Listed(kind, v)),
+                )
+            })
+            .collect();
+        o.table(&[("", false)], rows);
     }
     o.heading("Storage");
     match &u.bucket {
         Some(b) => {
             o.kv("Storage canister", b.clone());
             let s = &p.data.json;
+            let mut a: Vec<(String, Action2)> =
+                vec![("top up".into(), act(|app| app.top_up_form()))];
             if !s.is_null() {
                 o.kv("Status", s["status"].as_str().unwrap_or("?").to_string());
                 o.kv("Cycles", sep(s["cycles"].as_u64().unwrap_or(0)));
@@ -1067,13 +1164,6 @@ fn settings(o: &mut Out, p: &Page) {
                 if let Some(d) = s["days"].as_u64() {
                     o.kv("Runs for", format!("~{d} days"));
                 }
-                if s["stale"].as_bool() == Some(true) {
-                    o.text(Line::styled(
-                        "The storage code is outdated.",
-                        Style::default().fg(WARN),
-                    ));
-                    o.button("Upgrade storage", "", |app: &mut App| app.upgrade_bucket());
-                }
                 if let Some(c) = s["controllers"].as_array() {
                     o.kv(
                         "Controllers",
@@ -1083,62 +1173,67 @@ fn settings(o: &mut Out, p: &Page) {
                             .join(", "),
                     );
                 }
+                if s["stale"].as_bool() == Some(true) {
+                    o.text(Line::styled(
+                        "The storage code is outdated.",
+                        Style::default().fg(WARN),
+                    ));
+                    a.push(("upgrade storage".into(), act(|app| app.upgrade_bucket())));
+                }
+                let bh = s["controllers"].as_array().is_some_and(|c| {
+                    c.iter()
+                        .any(|v| v.as_str() == Some(crate::storage::BLACKHOLE))
+                });
+                if !bh {
+                    a.push((
+                        "add blackhole controller".into(),
+                        act(|app| app.add_blackhole()),
+                    ));
+                }
             }
-            o.button("Top up", "ICP → cycles", |app: &mut App| {
-                app.top_up_form()
-            });
-            let has_blackhole = p.data.json["controllers"].as_array().is_some_and(|c| {
-                c.iter()
-                    .any(|v| v.as_str() == Some(crate::storage::BLACKHOLE))
-            });
-            if !has_blackhole {
-                o.button(
-                    "Add blackhole controller",
-                    "public status monitoring",
-                    |app: &mut App| app.add_blackhole(),
-                );
-            }
+            o.actions("storage", a);
         }
         None => {
             o.note("Pictures are stored in your own storage canister (a “bucket”), paid with ICP from your wallet.");
-            o.button("Create storage", "", |app: &mut App| {
-                app.create_bucket_form()
-            });
+            o.actions(
+                "storage",
+                vec![("create storage".into(), act(|app| app.create_bucket_form()))],
+            );
         }
     }
-    o.heading("Account suspension");
+    o.heading("Account");
     o.note("Suspending encrypts all your posts with a password; reactivating decrypts them.");
-    o.button(
-        if u.deactivated {
-            "Activate"
-        } else {
-            "Deactivate"
-        },
-        "",
-        |app: &mut App| app.crypt_form(),
-    );
-    o.heading("Principal change");
-    if p.data.text.is_empty() {
-        o.note("Move this account to another principal: request the change here, then sign in with the new principal to confirm it.");
-        o.button("Change principal", "", |app: &mut App| {
-            app.principal_change_form()
-        });
-    } else {
+    if !p.data.text.is_empty() {
         o.note(&format!(
-            "Request registered: sign in with {} to confirm the change.",
+            "Principal change requested: sign in with {} to confirm it.",
             p.data.text
         ));
     }
+    o.actions(
+        "account",
+        vec![
+            (
+                if u.deactivated {
+                    "activate"
+                } else {
+                    "deactivate"
+                }
+                .into(),
+                act(|app| app.crypt_form()),
+            ),
+            (
+                "change principal".into(),
+                act(|app| app.principal_change_form()),
+            ),
+        ],
+    );
 }
 
 fn welcome(o: &mut Out, _p: &Page) {
     let app = o.app;
-    o.text(Line::styled("New user detected", head()));
-    o.blank();
+    o.heading("New user detected");
     o.kv("Your principal", app.principal.clone());
-    o.blank();
     o.note("This principal has no account yet. Join with an invite code, or pay for credits with ICP, then pick a name.");
-    o.blank();
     o.button("Join with an invite", "", |app: &mut App| {
         app.join_form(String::new())
     });
@@ -1166,10 +1261,7 @@ fn tokens(o: &mut Out, p: &Page) {
         o.text(Line::styled("loading…", dim()));
         return;
     }
-    o.text(Line::styled(
-        format!("{} token", app.backend.token_symbol),
-        head(),
-    ));
+    o.heading(&format!("{} token", app.backend.token_symbol));
     o.kv("Maximum supply", amount(app.backend.maximum_supply, dec));
     o.kv("Circulating supply", amount(n("circulating_supply"), dec));
     o.kv("Holders", sep(n("holders")));
@@ -1178,70 +1270,93 @@ fn tokens(o: &mut Out, p: &Page) {
     o.kv("Nakamoto coefficient", sep(n("nakamoto_coefficient")));
     o.kv("Fees burned", amount(n("fees_burned"), dec));
     o.kv("Bridged out", amount(n("bridged_out"), dec));
-    o.kv(
-        "Volume 24h / 7d",
-        format!(
-            "{} / {}",
-            amount(n("volume_day"), dec),
-            amount(n("volume_week"), dec)
-        ),
-    );
+    o.kv("Volume 24h", amount(n("volume_day"), dec));
+    o.kv("Volume 7d", amount(n("volume_week"), dec));
     o.kv("ICP per 1 XDR", icp(n("e8s_for_one_xdr")));
-    o.kv(
-        "Revenue per 1k credits",
-        format!("{} ICP", icp(n("e8s_revenue_per_1k"))),
-    );
+    o.kv("ICP per 1k credits", icp(n("e8s_revenue_per_1k")));
     o.kv("Last weekly chores", ago(n("last_weekly_chores")));
     if let Some((a, account)) = &p.data.auction {
         o.heading("Upcoming auction");
         o.kv("Tokens", amount(a.amount, dec));
         o.kv("Your deposit account", account.clone());
-        o.note("Bids are paid in ICP from your wallet; tokens are distributed at the next weekly chores by highest price.");
-        for b in &a.bids {
-            o.user_link(
-                b.user,
-                &format!(
-                    "{} tokens at {} ICP/token · {}",
-                    amount(b.amount, dec),
-                    icp(b.e8s_per_token * 10u64.pow(dec)),
-                    ago(b.timestamp)
-                ),
-            );
-        }
+        o.note("Bids are paid in ICP from your wallet; tokens are sold at the next weekly chores to the highest bids.");
         if app.user.is_some() {
-            o.button("Bid", "", |app: &mut App| app.bid_form());
+            let mut acts: Vec<(String, Action2)> = vec![("bid".into(), act(|app| app.bid_form()))];
             if a.bids.iter().any(|b| b.user == app.me()) {
-                o.button("Cancel my bid", "", |app: &mut App| app.cancel_bid());
+                acts.push(("cancel my bid".into(), act(|app| app.cancel_bid())));
             }
+            o.actions("auction", acts);
+        }
+        if !a.bids.is_empty() {
+            let rows = a
+                .bids
+                .iter()
+                .map(|b| {
+                    (
+                        format!("bid:{}", b.user),
+                        vec![
+                            (format!("@{}", app.name(b.user)), accent()),
+                            (amount(b.amount, dec), Style::default()),
+                            (icp(b.e8s_per_token * 10u64.pow(dec)), Style::default()),
+                            (ago(b.timestamp), dim()),
+                        ],
+                        Some(Target::UserId(b.user)),
+                    )
+                })
+                .collect();
+            o.table(
+                &[
+                    ("bidder", false),
+                    ("tokens", true),
+                    ("ICP per token", true),
+                    ("when", true),
+                ],
+                rows,
+            );
         }
     }
     o.heading("Top token holders");
     if let Some(b) = s["balances"].as_array() {
         let circ = n("circulating_supply").max(1);
-        for v in b.iter().take(100) {
-            let bal = v[1].as_u64().unwrap_or(0);
-            let uid = v[2].as_u64().unwrap_or(0);
-            let owner = v[0]["owner"].as_str().unwrap_or("").to_string();
-            let pct = bal as f64 * 100.0 / circ as f64;
-            o.row(
-                format!("h:{owner}"),
-                Line::from(vec![
-                    Span::styled(
-                        format!("{:<18}", fit(&format!("@{}", app.name(uid)), 17)),
-                        accent(),
-                    ),
-                    Span::raw(format!("{:>16}", amount(bal, dec))),
-                    Span::styled(format!("  {pct:.2}%"), dim()),
-                ]),
-                Target::Page(
-                    Kind::Transactions(owner.clone(), String::new()),
-                    format!("transactions of @{}", app.name(uid)),
-                ),
-            );
-        }
+        let rows = b
+            .iter()
+            .take(100)
+            .enumerate()
+            .map(|(i, v)| {
+                let bal = v[1].as_u64().unwrap_or(0);
+                let uid = v[2].as_u64();
+                let name = uid.map(|u| format!("@{}", app.name(u))).unwrap_or_else(|| "—".into());
+                let active = v[3].as_bool().unwrap_or(false);
+                let owner = v[0]["owner"].as_str().unwrap_or("").to_string();
+                (
+                    format!("h:{owner}"),
+                    vec![
+                        ((i + 1).to_string(), dim()),
+                        (name.clone(), if active { accent() } else { dim() }),
+                        (amount(bal, dec), Style::default()),
+                        (format!("{:.2}%", bal as f64 * 100.0 / circ as f64), dim()),
+                        (owner.clone(), dim()),
+                    ],
+                    Some(Target::Page(
+                        Kind::Transactions(owner, String::new()),
+                        format!("transactions of {name}"),
+                    )),
+                )
+            })
+            .collect();
+        o.table(
+            &[
+                ("#", true),
+                ("holder", false),
+                ("balance", true),
+                ("share", true),
+                ("principal", false),
+            ],
+            rows,
+        );
     }
     o.heading("Latest transactions");
-    txs(o, p, &p.data.txs);
+    txs(o, &p.data.txs);
     o.row(
         "alltx",
         Line::styled("▸ all transactions", accent()),
@@ -1252,28 +1367,42 @@ fn tokens(o: &mut Out, p: &Page) {
     );
 }
 
-fn txs(o: &mut Out, _p: &Page, list: &[(u32, api::Transaction)]) {
+fn txs(o: &mut Out, list: &[(u32, api::Transaction)]) {
     let app = o.app;
     let dec = app.backend.token_decimals;
-    let short = |a: &api::Account| -> String {
+    let who = |a: &api::Account| -> String {
         if a.owner == app.cfg.canister || a.owner.is_empty() {
             "minting".into()
         } else {
-            fit(&a.owner, 14)
+            a.owner.clone()
         }
     };
-    for (id, t) in list {
-        o.row(
-            format!("tx:{id}"),
-            Line::from(vec![
-                Span::styled(format!("{id:>7}  "), dim()),
-                Span::styled(format!("{:<8}", ago(t.timestamp)), dim()),
-                Span::raw(format!("{:>15} → {:<15} ", short(&t.from), short(&t.to))),
-                Span::styled(format!("{:>14}", amount(t.amount, dec)), accent()),
-            ]),
-            Target::Tx(*id),
-        );
-    }
+    let rows = list
+        .iter()
+        .map(|(id, t)| {
+            (
+                format!("tx:{id}"),
+                vec![
+                    (id.to_string(), dim()),
+                    (ago(t.timestamp), dim()),
+                    (who(&t.from), Style::default()),
+                    (who(&t.to), Style::default()),
+                    (amount(t.amount, dec), accent()),
+                ],
+                Some(Target::Tx(*id)),
+            )
+        })
+        .collect();
+    o.table(
+        &[
+            ("id", true),
+            ("when", true),
+            ("from", false),
+            ("to", false),
+            ("amount", true),
+        ],
+        rows,
+    );
 }
 
 fn dashboard(o: &mut Out, p: &Page) {
@@ -1285,31 +1414,18 @@ fn dashboard(o: &mut Out, p: &Page) {
     }
     let n = |k: &str| s[k].as_u64().unwrap_or(0);
     let dec = app.backend.token_decimals;
-    o.text(Line::styled("Dashboard", head()));
-    o.kv(
-        "Users",
-        format!(
-            "{} ({} active, {} online, {} invited, {} in bootcamp)",
-            sep(n("users")),
-            sep(n("active_users")),
-            sep(n("users_online")),
-            sep(n("invited_users")),
-            sep(n("bootcamp_users"))
-        ),
-    );
-    o.kv(
-        "Posts / comments",
-        format!("{} / {}", sep(n("posts")), sep(n("comments"))),
-    );
+    o.heading("Users and content");
+    o.kv("Users", sep(n("users")));
+    o.kv("Active users", sep(n("active_users")));
+    o.kv("Online", sep(n("users_online")));
+    o.kv("Invited", sep(n("invited_users")));
+    o.kv("In bootcamp", sep(n("bootcamp_users")));
+    o.kv("Posts", sep(n("posts")));
+    o.kv("Comments", sep(n("comments")));
     o.kv("Realms", sep(n("realms")));
-    o.kv(
-        "Credits",
-        format!(
-            "{} (burned {})",
-            sep(n("credits")),
-            sep(n("burned_credits"))
-        ),
-    );
+    o.heading("Economy");
+    o.kv("Credits", sep(n("credits")));
+    o.kv("Credits burned", sep(n("burned_credits")));
     o.kv("Circulating supply", amount(n("circulating_supply"), dec));
     o.kv(
         "Rewards shared",
@@ -1320,111 +1436,131 @@ fn dashboard(o: &mut Out, p: &Page) {
         format!("{} ICP", icp(n("total_revenue_shared"))),
     );
     o.kv("ICP per 1 XDR", icp(n("e8s_for_one_xdr")));
+    if let Some(v) = s["vesting_tokens_of_x"].as_array() {
+        o.kv(
+            "Founder vesting",
+            format!(
+                "{} of {}",
+                amount(v[0].as_u64().unwrap_or(0), dec),
+                amount(v[1].as_u64().unwrap_or(0), dec)
+            ),
+        );
+    }
+    o.heading("Canister");
     o.kv(
         "Cycles",
-        format!(
-            "{} T (burn {} B/day)",
-            n("canister_cycle_balance") / 1_000_000_000_000,
-            n("canister_cycle_burn") / 1_000_000_000
-        ),
+        format!("{} T", n("canister_cycle_balance") / 1_000_000_000_000),
+    );
+    o.kv(
+        "Cycle burn",
+        format!("{} B/day", n("canister_cycle_burn") / 1_000_000_000),
     );
     o.kv("State size", format!("{} MB", n("state_size") / 1_000_000));
     o.kv("Last weekly chores", ago(n("last_weekly_chores")));
-    o.kv(
-        "Treasury account",
-        s["account"].as_str().unwrap_or("").to_string(),
-    );
-    o.kv(
-        "Canister",
-        s["canister_id"].as_str().unwrap_or("").to_string(),
-    );
     let lr = &s["last_release"];
     if !lr.is_null() {
         o.kv(
             "Last release",
             format!(
                 "{} ({})",
-                lr["commit"].as_str().unwrap_or(""),
+                lr["commit"]
+                    .as_str()
+                    .unwrap_or("")
+                    .chars()
+                    .take(10)
+                    .collect::<String>(),
                 ago(lr["timestamp"].as_u64().unwrap_or(0))
             ),
         );
-        if let Some(pid) = lr["post_id"].as_u64() {
-            o.row(
-                "rel",
-                Line::styled("▸ release proposal", accent()),
-                Target::Post(pid),
-            );
-        }
     }
-    if let Some(v) = s["vesting_tokens_of_x"].as_array() {
-        let (vested, total) = (v[0].as_u64().unwrap_or(0), v[1].as_u64().unwrap_or(0));
-        o.kv(
-            "Founder vesting",
-            format!("{} of {}", amount(vested, dec), amount(total, dec)),
+    o.kv(
+        "Canister id",
+        s["canister_id"].as_str().unwrap_or("").to_string(),
+    );
+    o.kv(
+        "Treasury account",
+        s["account"].as_str().unwrap_or("").to_string(),
+    );
+    if let Some(pid) = lr["post_id"].as_u64() {
+        o.row(
+            "rel",
+            Line::styled("▸ release proposal", accent()),
+            Target::Post(pid),
         );
     }
+    o.blank();
+    let stalwarts: Vec<u64> = s["stalwarts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_u64())
+        .collect();
+    o.users("stalwarts", "Stalwarts", &stalwarts, 3);
     if let Some(l) = s["weekly_karma_leaders"].as_array() {
         o.heading("Weekly reward leaders");
-        for v in l {
-            o.user_link(v[0].as_u64().unwrap_or(0), &sep(v[1].as_u64().unwrap_or(0)));
-        }
-    }
-    if let Some(l) = s["stalwarts"].as_array() {
-        o.heading("Stalwarts");
-        for v in l {
-            o.user_link(v.as_u64().unwrap_or(0), "");
-        }
+        let rows = l
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let id = v[0].as_u64().unwrap_or(0);
+                (
+                    format!("k:{id}"),
+                    vec![
+                        ((i + 1).to_string(), dim()),
+                        (format!("@{}", app.name(id)), accent()),
+                        (sep(v[1].as_u64().unwrap_or(0)), Style::default()),
+                    ],
+                    Some(Target::UserId(id)),
+                )
+            })
+            .collect();
+        o.table(&[("#", true), ("user", false), ("rewards", true)], rows);
     }
     o.heading("Logs");
     if let Some(l) = p.data.json2.as_array() {
         let mut l: Vec<&Value> = l.iter().collect();
         l.sort_by_key(|e| std::cmp::Reverse(e["timestamp"].as_u64().unwrap_or(0)));
-        for e in l.iter().take(300) {
-            let lvl = e["level"].as_str().unwrap_or("");
-            let st = match lvl {
-                "ERROR" => Style::default().fg(BAD),
-                "WARN" => Style::default().fg(WARN),
-                _ => dim(),
-            };
-            let r = crate::markdown::render(
-                e["message"].as_str().unwrap_or(""),
-                o.w.saturating_sub(22),
-            );
-            let mut first = true;
-            for b in r.blocks {
-                if let crate::markdown::Block::Line(t) = b {
-                    let mut sp = vec![Span::styled(
-                        if first {
-                            format!(
-                                "{:<14}{:<6}",
-                                datetime(e["timestamp"].as_u64().unwrap_or(0))
-                                    .chars()
-                                    .take(13)
-                                    .collect::<String>(),
-                                lvl
-                            )
-                        } else {
-                            " ".repeat(20)
-                        },
-                        st,
-                    )];
-                    sp.extend(t.spans);
-                    o.text(Line::from(sp));
-                    first = false;
-                }
-            }
-        }
+        let rows = l
+            .iter()
+            .take(300)
+            .enumerate()
+            .map(|(i, e)| {
+                let lvl = e["level"].as_str().unwrap_or("").to_string();
+                let st = match lvl.as_str() {
+                    "ERROR" => Style::default().fg(BAD),
+                    "WARN" => Style::default().fg(WARN),
+                    _ => dim(),
+                };
+                let msg = crate::markdown::first_line(e["message"].as_str().unwrap_or(""));
+                let full = e["message"].as_str().unwrap_or("").to_string();
+                (
+                    format!("log:{i}"),
+                    vec![
+                        (datetime(e["timestamp"].as_u64().unwrap_or(0)), dim()),
+                        (lvl, st),
+                        (msg, Style::default()),
+                    ],
+                    Some(run(move |app: &mut App| app.text_popup("Log entry", &full))),
+                )
+            })
+            .collect();
+        o.table(
+            &[("time", false), ("level", false), ("message", false)],
+            rows,
+        );
     }
 }
 
 fn distribution(o: &mut Out, p: &Page) {
-    o.text(Line::styled("Distribution", head()));
+    o.heading("Distribution");
     o.note("Reports of the last weekly distributions of rewards and minted tokens.");
     if o.app.user.is_some() {
-        o.button(
-            "Vote for delay",
-            "delay the next weekly chores (stalwarts)",
-            |app: &mut App| app.delay_chores(),
+        o.actions(
+            "dist",
+            vec![(
+                "vote to delay the weekly chores".into(),
+                act(|app| app.delay_chores()),
+            )],
         );
     }
     if let Some(list) = p.data.json.as_array() {
@@ -1435,57 +1571,85 @@ fn distribution(o: &mut Out, p: &Page) {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter_map(|v| v.as_str().map(|s| format!("- {s}")))
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
                 .collect();
-            o.md(&items.join("\n"));
+            // items like "0.6 to @user": two columns
+            let rows = items
+                .iter()
+                .enumerate()
+                .map(|(i, it)| {
+                    let (a, b) = it.split_once(" to ").unwrap_or(("", it));
+                    (
+                        format!("d:{i}"),
+                        vec![(a.to_string(), Style::default()), (b.to_string(), accent())],
+                        None,
+                    )
+                })
+                .collect();
+            if !items.is_empty() {
+                o.table(&[("amount", true), ("to", false)], rows);
+            }
         }
     }
 }
 
 fn domains(o: &mut Out, p: &Page) {
     let app = o.app;
-    o.text(Line::styled("Domains", head()));
-    o.note("Each domain serves this frontend with its own realm configuration. Owners decide which realms show.");
+    o.heading("Domains");
+    o.note("Each domain serves this frontend with its own realm configuration. Owners decide which realms show. Enter on your domain edits it.");
     if app.user.is_some() {
-        o.button("Add your domain", "", |app: &mut App| app.domain_form(None));
+        o.actions(
+            "dom",
+            vec![("add your domain".into(), act(|app| app.domain_form(None)))],
+        );
     }
-    o.blank();
-    for (name, c) in &p.data.domains {
-        let cfg = match &c.sub_config {
-            api::DomainSub::Journal(u) => format!("journal of @{}", app.name(*u)),
-            api::DomainSub::WhiteListedRealms(r) => format!(
-                "only: {}",
-                r.iter()
-                    .map(|r| format!("/{r}"))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ),
-            api::DomainSub::BlackListedRealms(r) if r.is_empty() => "all realms".into(),
-            api::DomainSub::BlackListedRealms(r) => format!(
-                "hidden: {}",
-                r.iter()
-                    .map(|r| format!("/{r}"))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ),
-        };
-        let mine = c.owner == Some(app.me());
-        let mut l = vec![Span::styled(name.clone(), accent())];
-        if let Some(ow) = c.owner {
-            l.push(Span::styled(format!("  @{}", app.name(ow)), dim()));
-        }
-        if mine {
-            l.push(Span::styled(
-                "  yours: Enter edits",
-                Style::default().fg(GOOD),
-            ));
-        }
-        let mut lines = vec![Line::from(l), Line::raw(format!("  {cfg}"))];
-        if name == &app.cfg.domain {
-            lines.push(Line::styled("  (this client)", dim()));
-        }
-        o.rows(format!("d:{name}"), lines, Target::Domain(name.clone()));
-    }
+    let rows = p
+        .data
+        .domains
+        .iter()
+        .map(|(name, c)| {
+            let cfg = match &c.sub_config {
+                api::DomainSub::Journal(u) => format!("journal of @{}", app.name(*u)),
+                api::DomainSub::WhiteListedRealms(r) => format!(
+                    "only {}",
+                    r.iter()
+                        .map(|r| format!("/{r}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+                api::DomainSub::BlackListedRealms(r) if r.is_empty() => "all realms".into(),
+                api::DomainSub::BlackListedRealms(r) => format!(
+                    "all but {}",
+                    r.iter()
+                        .map(|r| format!("/{r}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+            };
+            let mut nm = name.clone();
+            if name == &app.cfg.domain {
+                nm += " (this client)";
+            }
+            let owner = c
+                .owner
+                .map(|o| format!("@{}", app.name(o)))
+                .unwrap_or_else(|| "DAO".into());
+            let st = if c.owner == Some(app.me()) {
+                Style::default().fg(GOOD)
+            } else {
+                accent()
+            };
+            (
+                format!("d:{name}"),
+                vec![(nm, st), (owner, Style::default()), (cfg, dim())],
+                Some(Target::Domain(name.clone())),
+            )
+        })
+        .collect();
+    o.table(
+        &[("domain", false), ("owner", false), ("content", false)],
+        rows,
+    );
 }
 
 fn ethereum(o: &mut Out, p: &Page) {
@@ -1500,47 +1664,55 @@ fn ethereum(o: &mut Out, p: &Page) {
         return;
     };
     let dec = app.backend.token_decimals;
-    o.text(Line::styled("Ethereum bridge", head()));
-    o.note("Bridging burns tokens here and returns a signed mint recipe; submit it to the L1 token contract (mint) from an Ethereum wallet.");
+    o.heading("Ethereum bridge");
+    o.note("Bridging burns tokens here and returns a signed mint recipe; submit it to the L1 token contract from an Ethereum wallet.");
     o.kv("Token contract", cfg.token_address.clone());
     o.kv("Chain id", cfg.chain_id.to_string());
     o.kv("Minter (canister)", addr.clone());
     o.kv("Fee", format!("{} credits", cfg.fee_credits));
     o.kv("Minimum", amount(cfg.min_amount, dec));
     if app.user.is_some() {
-        o.button(
-            "Bridge out",
-            "burn tokens, get a recipe",
-            |app: &mut App| app.bridge_form(),
+        o.actions(
+            "eth",
+            vec![("bridge out".into(), act(|app| app.bridge_form()))],
         );
     }
     o.heading("My recipes");
-    for r in recipes {
-        let sig = format!("0x{}", hex::encode(&r.signature));
-        let data = mint_calldata(r);
-        let md = format!(
-            "**Recipe #{}**\n\n- to: `{}`\n- amount: `{}` ({} base units)\n- burn block: `{}`\n- signature: `{}`\n\nSubmit `mintWithAuthorization(to, amount × 10^16, {}, signature)` on `{}` (chain {}), e.g.:\n\n```\ncast send {} {}\n```",
-            r.index,
-            r.eth_address,
-            amount(r.amount, dec),
-            r.amount,
-            r.burn_block,
-            sig,
-            r.index,
-            cfg.token_address,
-            cfg.chain_id,
-            cfg.token_address,
-            data
-        );
-        o.row(
-            format!("eth:{}", r.index),
-            Line::from(vec![
-                Span::styled(format!("#{}", r.index), accent()),
-                Span::raw(format!("  {} → {}", amount(r.amount, dec), r.eth_address)),
-            ]),
-            run(move |app: &mut App| app.text_popup("Mint recipe", &md)),
-        );
-    }
+    let rows = recipes
+        .iter()
+        .map(|r| {
+            let sig = format!("0x{}", hex::encode(&r.signature));
+            let data = mint_calldata(r);
+            let md = format!(
+                "**Recipe #{}**\n\n- to: `{}`\n- amount: `{}` ({} base units)\n- burn block: `{}`\n- signature: `{}`\n\nSubmit `mintWithAuthorization(to, amount × 10^16, {}, signature)` on `{}` (chain {}), e.g.:\n\n```\ncast send {} {}\n```",
+                r.index,
+                r.eth_address,
+                amount(r.amount, dec),
+                r.amount,
+                r.burn_block,
+                sig,
+                r.index,
+                cfg.token_address,
+                cfg.chain_id,
+                cfg.token_address,
+                data
+            );
+            (
+                format!("eth:{}", r.index),
+                vec![(format!("#{}", r.index), accent()), (amount(r.amount, dec), Style::default()), (r.eth_address.clone(), Style::default()), (format!("block {}", r.burn_block), dim())],
+                Some(run(move |app: &mut App| app.text_popup("Mint recipe", &md))),
+            )
+        })
+        .collect();
+    o.table(
+        &[
+            ("recipe", false),
+            ("amount", true),
+            ("to", false),
+            ("burn", false),
+        ],
+        rows,
+    );
 }
 
 /// Calldata of `mintWithAuthorization(address,uint256,uint256,bytes)` for a recipe,
@@ -1561,23 +1733,28 @@ pub fn mint_calldata(r: &api::EthRecipe) -> String {
 }
 
 fn recovery(o: &mut Out, p: &Page) {
-    o.text(Line::styled("Recovery", head()));
-    o.heading("Status");
+    o.heading("Recovery status");
     o.md(&p.data.text);
     o.heading("Supporters");
-    for s in &p.data.strings {
-        o.text(Line::raw(s.clone()));
+    if p.data.strings.is_empty() {
+        o.text(Line::styled("none", dim()));
+    } else {
+        o.note(&p.data.strings.join("  "));
     }
     if o.app.user.is_some() {
-        o.blank();
-        o.button(
-            "Upload emergency binary",
-            "controllers only",
-            |app: &mut App| app.emergency_binary_form(),
+        o.actions(
+            "rec",
+            vec![
+                (
+                    "upload emergency binary".into(),
+                    act(|app| app.emergency_binary_form()),
+                ),
+                (
+                    "confirm binary hash".into(),
+                    act(|app| app.confirm_hash_form()),
+                ),
+            ],
         );
-        o.button("Confirm binary hash", "token holders", |app: &mut App| {
-            app.confirm_hash_form()
-        });
     }
 }
 
@@ -1586,7 +1763,6 @@ pub const LINKS: &str = "## Price listings\n\n- [CoinGecko](https://www.coingeck
 ## Development\n\n- [user #0](#/user/0)\n- [user #935](#/user/935)\n";
 
 fn links(o: &mut Out) {
-    // headings as text, every link a selectable row
     for line in LINKS.lines() {
         if let Some(h) = line.strip_prefix("## ") {
             o.heading(h);

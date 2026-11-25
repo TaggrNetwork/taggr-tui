@@ -21,13 +21,15 @@ CONFIGURATION
     domain = "6qfxa-ryaaa-aaaai-qbhsq-cai.icp.net"  # domain config used for realm filtering
     icons = "plain"                           # or "nerd" (Nerd Font glyphs)
     images = true                             # pictures inside posts
+    expand_images = false                     # show pictures expanded (else I per post)
     image_protocol = "auto"                   # kitty | sixel | iterm2 | halfblocks
     download_dir = "~/Downloads"
 
 LAYOUT
   Sidebar: feeds, your realms, your pages, Taggr pages. Right: the open page.
   Enter opens what is selected (a post, user, realm, tag, notification or
-  ▸ button) on top of the page; Esc goes back.
+  ▸ button) on top of the page; Esc goes back. A row of ▸ actions opens a menu
+  of them; the bottom line always lists the keys for what is selected.
 
 KEYS
   Tab                    sidebar / page
@@ -35,7 +37,7 @@ KEYS
   g G  PgUp PgDn Space   top / bottom / page
   Enter  l               open
   Esc  h                 back
-  [ ]                    tabs: realm New/Hot, profile Posts/Mentions/Rewarded,
+  1-9  [ ]  click        tabs: realm New/Hot, profile Posts/Mentions/Rewarded,
                          realms order, proposal types
   s                      reload
   /                      search (users, tags, realms, posts); in All realms:
@@ -51,6 +53,7 @@ KEYS
   t  P  v                tip · repost · vote in the poll
   e  D                   edit · delete (your posts; delete shows the cost)
   i                      info: reactions by user, tips, versions
+  I                      show / hide the post's pictures (collapsed by default)
   o  O                   links in the post · open the post in the browser
   m                      move out of its realm (realm controllers)
   A Z X                  proposal: accept · reject · cancel (yours)

@@ -418,7 +418,8 @@ fn fit(s: &str, w: usize) -> String {
 /// Renders `md` to lines at most `w` columns wide.
 pub fn render(md: &str, w: usize) -> Rendered {
     let mut out = Rendered::default();
-    let md = wrap_pgp(md);
+    // terminals disagree on the width of variation selectors and joined emoji
+    let md = wrap_pgp(&md.replace(['\u{FE0F}', '\u{200D}'], ""));
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let mut r = R {
         w: w.max(10),

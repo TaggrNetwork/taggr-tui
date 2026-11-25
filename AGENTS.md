@@ -81,6 +81,11 @@ On this machine `tmux` may be a shell alias; call `/usr/bin/tmux`. For a local r
   current width; `Page::dirty` forces a rebuild, `sel_key` keeps the selection across rebuilds.
 - **Selection**: only entries with a target are selectable; j/k scroll inside an entry taller
   than half the view before moving on.
+- **Layout helpers** (`page::Out`): consecutive `kv` pairs become a multi-column grid,
+  `users` flows names inline, `table` aligns columns, `actions` is a row of ▸ actions (Enter:
+  menu), `tab_bar` records click ranges, `boxed` frames reposts, polls and reports; comments
+  hang off `│` guides. Keep screens dense: no one-item-per-line lists. The bottom line
+  (`draw::hints`) lists the keys for the selected target.
 - **Backend shapes**: JSON methods take `null`, a value, or an array of arguments
   (`ic::encode_args`); updates reply `{"Ok": …}`/`{"Err": …}` (`Api::call`), a few toggles
   reply bare values (`Api::call_any`). `add_post`, `edit_post`, ledgers and the management
