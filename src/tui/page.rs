@@ -76,8 +76,8 @@ pub fn run(f: impl Fn(&mut App) + 'static) -> Target {
 
 pub enum Ln {
     Text(Line<'static>),
-    /// Picture: url, rows it takes, alt.
-    Image(String, u16, String),
+    /// Picture: url, rows it takes, alt, columns it is indented by.
+    Image(String, u16, String, u16),
 }
 
 pub struct Entry {
@@ -93,7 +93,7 @@ impl Entry {
             .iter()
             .map(|l| match l {
                 Ln::Text(_) => 1,
-                Ln::Image(_, h, _) => *h as usize,
+                Ln::Image(_, h, _, _) => *h as usize,
             })
             .sum()
     }
@@ -146,6 +146,8 @@ pub struct Page {
     pub off: usize,
     /// Filter or search text of the page (realms search, search query).
     pub query: String,
+    /// Entry index of the tab bar and each tab's column range.
+    pub tab_row: Option<(usize, Vec<(usize, usize)>)>,
 }
 
 impl Page {
@@ -172,6 +174,7 @@ impl Page {
             sel_key: String::new(),
             off: 0,
             query,
+            tab_row: None,
         }
     }
 
@@ -424,66 +427,125 @@ pub struct Out<'a> {
     pub e: Vec<Entry>,
     pub w: usize,
     pub app: &'a App,
+    /// Key/value pairs waiting to be laid out as a grid.
+    kv: Vec<(String, String)>,
+    /// Entry index of the tab row and each tab's column range.
+    pub tabs: Option<(usize, Vec<(usize, usize)>)>,
 }
 
+/// A table cell: text and style.
+pub type Cell = (String, Style);
+
 impl<'a> Out<'a> {
+    pub fn new(app: &'a App, w: usize) -> Out<'a> {
+        Out {
+            e: Vec::new(),
+            w,
+            app,
+            kv: Vec::new(),
+            tabs: None,
+        }
+    }
+
+    fn push(&mut self, lines: Vec<Ln>, target: Option<Target>, key: String) {
+        self.flush_kv();
+        self.e.push(Entry { lines, target, key });
+    }
+
+    pub fn finish(&mut self) -> Vec<Entry> {
+        self.flush_kv();
+        std::mem::take(&mut self.e)
+    }
+
     pub fn text(&mut self, l: Line<'static>) {
-        self.e.push(Entry {
-            lines: vec![Ln::Text(l)],
-            target: None,
-            key: String::new(),
-        });
+        self.push(vec![Ln::Text(l)], None, String::new());
     }
     pub fn blank(&mut self) {
         self.text(Line::raw(""));
     }
+    /// A dim full-width line between things.
+    pub fn rule(&mut self) {
+        let w = self.w;
+        self.text(Line::styled("─".repeat(w), dim()));
+    }
     pub fn heading(&mut self, s: &str) {
+        self.flush_kv();
         if !self.e.is_empty() {
             self.blank();
         }
-        self.text(Line::styled(s.to_string(), head()));
+        let w = self.w;
+        let t = format!("{s} ");
+        let fill = w.saturating_sub(width(&t));
+        self.text(Line::from(vec![
+            Span::styled(t, head()),
+            Span::styled("─".repeat(fill), dim()),
+        ]));
     }
-    /// `label: value` row.
+    /// `label value` pair; consecutive pairs are laid out in columns.
     pub fn kv(&mut self, k: &str, v: impl Into<String>) {
-        let first = [Span::styled(format!("{k:<26}"), dim())];
-        let rest = [Span::raw(" ".repeat(26))];
-        let lines = markdown::wrap(vec![Span::raw(v.into())], self.w, &first, &rest);
-        self.e.push(Entry {
-            lines: lines.into_iter().map(Ln::Text).collect(),
-            target: None,
-            key: String::new(),
-        });
+        self.kv.push((k.to_string(), v.into()));
     }
-    pub fn md(&mut self, md: &str) {
-        let r = markdown::render(md, self.w);
-        let lines = blocks(self.app, r.blocks, self.w);
-        if !lines.is_empty() {
+    fn flush_kv(&mut self) {
+        if self.kv.is_empty() {
+            return;
+        }
+        let pairs = std::mem::take(&mut self.kv);
+        let kw = pairs.iter().map(|(k, _)| width(k)).max().unwrap_or(0) + 2;
+        // values longer than a column get a full line of their own
+        let col_w = 42.max(kw + 12);
+        let cols = (self.w / col_w).clamp(1, 4);
+        let col_w = self.w / cols;
+        let (short, long): (Vec<_>, Vec<_>) = pairs
+            .into_iter()
+            .partition(|(_, v)| kw + width(v) < col_w - 2 || cols == 1);
+        for chunk in short.chunks(cols) {
+            let mut sp = Vec::new();
+            for (k, v) in chunk {
+                sp.push(Span::styled(format!("{k:<kw$}"), dim()));
+                let cell = fit(v, col_w - kw - 2);
+                let pad = col_w - kw - width(&cell);
+                sp.push(Span::raw(cell));
+                sp.push(Span::raw(" ".repeat(pad)));
+            }
             self.e.push(Entry {
-                lines,
+                lines: vec![Ln::Text(Line::from(sp))],
+                target: None,
+                key: String::new(),
+            });
+        }
+        for (k, v) in long {
+            let first = [Span::styled(format!("{k:<kw$}"), dim())];
+            let rest = [Span::raw(" ".repeat(kw))];
+            let lines = markdown::wrap(vec![Span::raw(v)], self.w, &first, &rest);
+            self.e.push(Entry {
+                lines: lines.into_iter().map(Ln::Text).collect(),
                 target: None,
                 key: String::new(),
             });
         }
     }
-    pub fn note(&mut self, s: &str) {
-        for l in markdown::wrap(vec![Span::styled(s.to_string(), dim())], self.w, &[], &[]) {
-            self.text(l);
+    pub fn md(&mut self, md: &str) {
+        let r = markdown::render(md, self.w);
+        let lines = blocks(self.app, r.blocks, self.w);
+        if !lines.is_empty() {
+            self.push(lines, None, String::new());
         }
+    }
+    pub fn note(&mut self, s: &str) {
+        let lines = markdown::wrap(vec![Span::styled(s.to_string(), dim())], self.w, &[], &[]);
+        self.push(
+            lines.into_iter().map(Ln::Text).collect(),
+            None,
+            String::new(),
+        );
     }
     /// Selectable row.
     pub fn row(&mut self, key: impl Into<String>, l: Line<'static>, t: Target) {
-        self.e.push(Entry {
-            lines: vec![Ln::Text(l)],
-            target: Some(t),
-            key: key.into(),
-        });
+        self.push(vec![Ln::Text(l)], Some(t), key.into());
     }
-    pub fn rows(&mut self, key: impl Into<String>, lines: Vec<Line<'static>>, t: Target) {
-        self.e.push(Entry {
-            lines: lines.into_iter().map(Ln::Text).collect(),
-            target: Some(t),
-            key: key.into(),
-        });
+    pub fn entry(&mut self, e: Entry) {
+        self.flush_kv();
+        self.e.push(e);
     }
     /// A selectable action row: `▸ label` running `f`.
     pub fn button(&mut self, label: &str, hint: &str, f: impl Fn(&mut App) + 'static) {
@@ -491,28 +553,195 @@ impl<'a> Out<'a> {
         if !hint.is_empty() {
             sp.push(Span::styled(format!("  {hint}"), dim()));
         }
+        self.push(
+            vec![Ln::Text(Line::from(sp))],
+            Some(run(f)),
+            format!("btn:{label}"),
+        );
+    }
+    /// Several buttons on one line; Enter opens a menu of them.
+    pub fn actions(&mut self, key: &str, items: Vec<(String, Action2)>) {
+        if items.is_empty() {
+            return;
+        }
+        let mut sp = Vec::new();
+        for (i, (l, _)) in items.iter().enumerate() {
+            if i > 0 {
+                sp.push(Span::raw("   "));
+            }
+            sp.push(Span::styled(format!("▸ {l}"), accent()));
+        }
+        let lines = markdown::wrap(sp, self.w, &[], &[]);
+        let items = Rc::new(items);
+        let t = run(move |app: &mut App| {
+            if items.len() == 1 {
+                return (items[0].1)(app);
+            }
+            let mut m = super::Menu::new("Actions");
+            for (l, f) in items.iter() {
+                let f = f.clone();
+                m = m.add(l.clone(), move |app| f(app));
+            }
+            app.popup = Some(super::Popup::Menu(m));
+        });
+        self.push(
+            lines.into_iter().map(Ln::Text).collect(),
+            Some(t),
+            format!("act:{key}"),
+        );
+    }
+    /// `label: @a @b @c …` flowing over at most `max_lines`; Enter lists them all.
+    pub fn users(&mut self, key: &str, label: &str, ids: &[u64], max_lines: usize) {
+        if ids.is_empty() {
+            return;
+        }
+        let first = [Span::styled(format!("{label} ({}) ", ids.len()), dim())];
+        let mut sp = Vec::new();
+        for id in ids {
+            sp.push(Span::styled(
+                format!("@{}", self.app.name(*id)),
+                Style::default().fg(ACCENT),
+            ));
+            sp.push(Span::raw("  "));
+        }
+        let mut lines = markdown::wrap(sp, self.w, &first, &[Span::raw("  ")]);
+        if lines.len() > max_lines {
+            lines.truncate(max_lines);
+            if let Some(l) = lines.last_mut() {
+                l.spans.push(Span::styled(" … Enter: all", dim()));
+            }
+        }
+        let ids = ids.to_vec();
+        let title = label.to_string();
+        let t = if ids.len() == 1 {
+            Target::UserId(ids[0])
+        } else {
+            Target::Page(Kind::Users(ids), title)
+        };
+        self.push(
+            lines.into_iter().map(Ln::Text).collect(),
+            Some(t),
+            format!("users:{key}"),
+        );
+    }
+    /// A tab bar; mouse clicks and `1`…`9` pick a tab, `[` `]` cycle.
+    pub fn tab_bar(&mut self, names: &[&str], cur: usize) {
+        self.flush_kv();
+        let mut sp = vec![];
+        let mut ranges = vec![];
+        let mut x = 0;
+        for (i, n) in names.iter().enumerate() {
+            let label = format!(" {} {n} ", i + 1);
+            let st = if i == cur {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().add_modifier(Modifier::REVERSED).fg(DIM)
+            };
+            ranges.push((x, x + width(&label)));
+            x += width(&label) + 1;
+            sp.push(Span::styled(label, st));
+            sp.push(Span::raw(" "));
+        }
+        sp.push(Span::styled(format!(" 1-{} or [ ]", names.len()), dim()));
+        self.tabs = Some((self.e.len(), ranges));
         self.e.push(Entry {
             lines: vec![Ln::Text(Line::from(sp))],
-            target: Some(run(f)),
-            key: format!("btn:{label}"),
+            target: None,
+            key: String::new(),
         });
     }
-    pub fn user_link(&mut self, id: u64, extra: &str) {
-        let name = self.app.name(id);
-        self.row(
-            format!("u:{id}"),
-            Line::from(vec![
-                Span::styled(format!("@{name}"), Style::default().fg(ACCENT)),
-                Span::styled(format!(" {extra}"), dim()),
-            ]),
-            Target::UserId(id),
-        );
+    /// A table with a header; `right` columns align right, the widest text column shrinks.
+    pub fn table(&mut self, head: &[(&str, bool)], rows: Vec<(String, Vec<Cell>, Option<Target>)>) {
+        self.flush_kv();
+        let n = head.len();
+        let mut widths: Vec<usize> = head.iter().map(|(h, _)| width(h)).collect();
+        for (_, cells, _) in &rows {
+            for (i, c) in cells.iter().enumerate().take(n) {
+                widths[i] = widths[i].max(width(&c.0));
+            }
+        }
+        let gap = 2;
+        while widths.iter().sum::<usize>() + gap * (n - 1) > self.w {
+            let i = (0..n).max_by_key(|i| widths[*i]).unwrap_or(0);
+            if widths[i] <= 4 {
+                break;
+            }
+            widths[i] -= 1;
+        }
+        let line = |cells: Vec<Cell>, header: bool| -> Line<'static> {
+            let mut sp = Vec::new();
+            for (i, (t, st)) in cells.into_iter().enumerate().take(n) {
+                if i > 0 {
+                    sp.push(Span::raw(" ".repeat(gap)));
+                }
+                let t = fit(&t, widths[i]);
+                let pad = " ".repeat(widths[i].saturating_sub(width(&t)));
+                let st = if header {
+                    dim().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                } else {
+                    st
+                };
+                if head[i].1 {
+                    sp.push(Span::raw(pad));
+                    sp.push(Span::styled(t, st));
+                } else {
+                    sp.push(Span::styled(t, st));
+                    if i + 1 < n {
+                        sp.push(Span::raw(pad));
+                    }
+                }
+            }
+            Line::from(sp)
+        };
+        let h: Vec<Cell> = head
+            .iter()
+            .map(|(t, _)| (t.to_string(), Style::default()))
+            .collect();
+        self.e.push(Entry {
+            lines: vec![Ln::Text(line(h, true))],
+            target: None,
+            key: String::new(),
+        });
+        for (key, cells, t) in rows {
+            let l = line(cells, false);
+            self.e.push(Entry {
+                lines: vec![Ln::Text(l)],
+                target: t,
+                key,
+            });
+        }
     }
 }
 
-/// Markdown blocks to page lines; pictures become image lines when enabled.
+/// Something a button in an action row does.
+pub type Action2 = Rc<dyn Fn(&mut App)>;
+
+pub fn width(s: &str) -> usize {
+    Span::raw(s).width()
+}
+
+/// Cut to `w` columns with an ellipsis.
+pub fn fit(s: &str, w: usize) -> String {
+    if width(s) <= w {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    for c in s.chars() {
+        if width(&out) + width(&c.to_string()) + 1 > w {
+            break;
+        }
+        out.push(c);
+    }
+    out.push('…');
+    out
+}
+
+/// Markdown blocks to page lines; pictures stay collapsed.
 pub fn blocks(app: &App, blocks: Vec<Block>, w: usize) -> Vec<Ln> {
-    blocks_with(app, blocks, w, &BTreeMap::new())
+    blocks_with(app, blocks, w, &BTreeMap::new(), false)
 }
 
 fn blocks_with(
@@ -520,30 +749,122 @@ fn blocks_with(
     blocks: Vec<Block>,
     w: usize,
     urls: &BTreeMap<String, String>,
+    expand: bool,
 ) -> Vec<Ln> {
-    blocks
-        .into_iter()
-        .map(|b| match b {
-            Block::Line(l) => Ln::Text(l),
+    let mut out: Vec<Ln> = Vec::new();
+    // collapsed pictures: one line per run of pictures (blank lines between them dropped)
+    let mut run: Option<(usize, usize)> = None; // (line index, pictures)
+    let placeholder = |n: usize, alt: &str| {
+        let what = if n == 1 {
+            format!("▣ {alt}")
+        } else {
+            format!("▣ {n} pictures")
+        };
+        Ln::Text(Line::from(vec![
+            Span::styled(what, Style::default().fg(ACCENT)),
+            Span::styled(
+                if app.images.enabled() {
+                    "  I: show"
+                } else {
+                    ""
+                },
+                dim(),
+            ),
+        ]))
+    };
+    for b in blocks {
+        match b {
+            Block::Line(l) => {
+                let blank = l.width() == 0;
+                if !blank {
+                    run = None;
+                }
+                out.push(Ln::Text(l));
+            }
             Block::Image(id, alt) => {
                 let url = urls.get(&id).cloned().unwrap_or(id);
-                if app.images.enabled() && url.starts_with("http") {
-                    Ln::Image(url.clone(), app.images.rows(&url, w as u16), alt)
+                let alt = if alt.is_empty() {
+                    "picture".to_string()
                 } else {
-                    Ln::Text(Line::styled(format!("[picture {alt}]"), dim()))
+                    alt
+                };
+                if expand && app.images.enabled() && url.starts_with("http") {
+                    out.push(Ln::Image(
+                        url.clone(),
+                        app.images.rows(&url, w as u16),
+                        alt,
+                        0,
+                    ));
+                    continue;
+                }
+                match run {
+                    Some((i, n)) => {
+                        out.truncate(i + 1);
+                        out[i] = placeholder(n + 1, &alt);
+                        run = Some((i, n + 1));
+                    }
+                    None => {
+                        out.push(placeholder(1, &alt));
+                        run = Some((out.len() - 1, 1));
+                    }
                 }
             }
+        }
+    }
+    out
+}
+
+/// Puts `inner` in a rounded box `w` wide titled `title`.
+pub fn boxed(title: &str, inner: Vec<Ln>, w: usize, st: Style) -> Vec<Ln> {
+    let iw = w.saturating_sub(4);
+    let t = format!("─ {title} ");
+    let mut out = vec![Ln::Text(Line::from(vec![
+        Span::styled("╭", st),
+        Span::styled(t.clone(), st),
+        Span::styled("─".repeat(w.saturating_sub(width(&t) + 2)), st),
+        Span::styled("╮", st),
+    ]))];
+    for l in inner {
+        out.push(match l {
+            Ln::Text(t) => {
+                let pad = iw.saturating_sub(t.width());
+                let mut sp = vec![Span::styled("│ ", st)];
+                sp.extend(t.spans);
+                sp.push(Span::raw(" ".repeat(pad)));
+                sp.push(Span::styled(" │", st));
+                Ln::Text(Line::from(sp))
+            }
+            Ln::Image(u, r, a, x) => Ln::Image(u, r, a, x + 2),
+        });
+    }
+    out.push(Ln::Text(Line::from(vec![
+        Span::styled("╰", st),
+        Span::styled("─".repeat(w.saturating_sub(2)), st),
+        Span::styled("╯", st),
+    ])));
+    out
+}
+
+/// Prefixes every line with `prefix` (images move right by its width).
+pub fn indent(lines: Vec<Ln>, prefix: &[Span<'static>]) -> Vec<Ln> {
+    let pw: usize = prefix.iter().map(|s| s.width()).sum();
+    lines
+        .into_iter()
+        .map(|l| match l {
+            Ln::Text(t) => {
+                let mut sp = prefix.to_vec();
+                sp.extend(t.spans);
+                Ln::Text(Line::from(sp))
+            }
+            Ln::Image(u, r, a, x) => Ln::Image(u, r, a, x + pw as u16),
         })
         .collect()
 }
 
 /// The one-line head of a post: author, realm, age, comments, reactions.
-pub fn post_head(app: &App, it: &Item, depth: usize) -> Line<'static> {
+pub fn post_head(app: &App, it: &Item) -> Line<'static> {
     let p = &it.post;
     let mut sp = Vec::new();
-    if depth > 0 {
-        sp.push(Span::styled("  ".repeat(depth - 1) + "↳ ", dim()));
-    }
     let me = app.me() == p.user;
     sp.push(Span::styled(
         format!("@{}", it.meta.author_name),
@@ -557,14 +878,12 @@ pub fn post_head(app: &App, it: &Item, depth: usize) -> Line<'static> {
         sp.push(Span::styled(format!("  /{r}"), Style::default().fg(WARN)));
     }
     sp.push(Span::styled(format!("  {}", ago(p.timestamp)), dim()));
-    if p.parent.is_some() && depth == 0 {
+    if p.parent.is_some() {
         sp.push(Span::styled("  reply", dim()));
     }
-    if !p.children.is_empty() || p.tree_size > 0 {
-        sp.push(Span::styled(
-            format!("  ↩ {}", p.tree_size.max(p.children.len() as u64)),
-            dim(),
-        ));
+    let n = p.tree_size.max(p.children.len() as u64);
+    if n > 0 {
+        sp.push(Span::styled(format!("  💬{n}"), dim()));
     }
     let reactions = reactions_line(p);
     if !reactions.is_empty() {
@@ -593,6 +912,9 @@ pub fn post_head(app: &App, it: &Item, depth: usize) -> Line<'static> {
     if it.meta.nsfw {
         sp.push(Span::styled("  NSFW", Style::default().fg(BAD)));
     }
+    if !p.files.is_empty() {
+        sp.push(Span::styled(format!("  ▣{}", p.files.len()), dim()));
+    }
     Line::from(sp)
 }
 
@@ -607,7 +929,7 @@ pub fn reaction_icon(id: u16) -> &'static str {
         52 => "💯",
         53 => "🚀",
         100 => "⭐",
-        101 => "🏴‍☠️",
+        101 => "☠",
         _ => "?",
     }
 }
@@ -621,101 +943,89 @@ fn reactions_line(p: &api::Post) -> String {
         .join(" ")
 }
 
-/// A post as an entry: head, body (preview or full), poll, repost.
-pub fn post_entry(app: &App, page: &Page, it: &Item, w: usize, full: bool, depth: usize) -> Entry {
+/// A post's lines `w` wide: head, body (preview or full), poll, repost, proposal.
+fn post_lines(app: &App, page: &Page, it: &Item, w: usize, full: bool, nested: bool) -> Vec<Ln> {
     let p = &it.post;
-    let indent = if depth > 0 { 2 * depth } else { 0 };
-    let bw = w.saturating_sub(indent).max(20);
-    let mut lines = vec![Ln::Text(post_head(app, it, depth))];
-    let pad = |l: Line<'static>| -> Line<'static> {
-        if indent == 0 {
-            return l;
-        }
-        let mut sp = vec![Span::raw(" ".repeat(indent))];
-        sp.extend(l.spans);
-        Line::from(sp)
-    };
+    let mut lines = vec![Ln::Text(post_head(app, it))];
     if p.deleted() {
-        lines.push(Ln::Text(pad(Line::styled("[deleted]", dim()))));
+        lines.push(Ln::Text(Line::styled("[deleted]", dim())));
     } else if it.meta.viewer_blocked {
-        lines.push(Ln::Text(pad(Line::styled(
+        lines.push(Ln::Text(Line::styled(
             "[you are blocked by the author]",
             dim(),
-        ))));
+        )));
     } else if p.hidden_for.contains(&app.me()) && !full {
-        lines.push(Ln::Text(pad(Line::styled("[hidden by you]", dim()))));
+        lines.push(Ln::Text(Line::styled("[hidden by you]", dim())));
     } else {
         let body = if full {
             p.body.replacen(markdown::CUT, "\n\n---\n\n", 1)
         } else {
             p.body.split(markdown::CUT).next().unwrap_or("").to_string()
         };
-        let r = markdown::render(&body, bw);
+        let r = markdown::render(&body, w);
         let urls = p.images(app.api.local.as_deref());
-        let mut body = blocks_with(app, r.blocks, bw, &urls);
+        let expand = app.expanded.contains(&p.id) || app.cfg.expand_images;
+        let mut body = blocks_with(app, r.blocks, w, &urls, expand);
         let cut = !full && (body.len() > PREVIEW || p.body.contains(markdown::CUT));
         if !full && body.len() > PREVIEW {
             body.truncate(PREVIEW);
         }
-        for l in body {
-            lines.push(match l {
-                Ln::Text(t) => Ln::Text(pad(t)),
-                img => img,
-            });
-        }
+        lines.extend(body);
         if cut {
-            lines.push(Ln::Text(pad(Line::styled("… (Enter: read on)", dim()))));
+            lines.push(Ln::Text(Line::styled("… Enter: read on", dim())));
         }
     }
     if let Some(poll) = p.poll() {
-        lines.extend(
-            poll_lines(app, p, poll, bw)
-                .into_iter()
-                .map(|l| Ln::Text(pad(l))),
-        );
+        let inner = poll_lines(app, p, poll, w.saturating_sub(4))
+            .into_iter()
+            .map(Ln::Text)
+            .collect();
+        lines.extend(boxed("poll", inner, w, Style::default().fg(HEAD)));
     }
     if let Some(api::Extension::Repost(id)) = &p.extension {
-        match page.data.embedded.get(id) {
-            Some(inner) => {
-                let mut l = vec![Ln::Text(pad(Line::styled(
-                    format!("┌ repost of #{id}"),
-                    dim(),
-                )))];
-                let e = post_entry(app, page, inner, bw.saturating_sub(2), false, 0);
-                for x in e.lines {
-                    l.push(match x {
-                        Ln::Text(t) => {
-                            let mut sp =
-                                vec![Span::raw(" ".repeat(indent)), Span::styled("│ ", dim())];
-                            sp.extend(t.spans);
-                            Ln::Text(Line::from(sp))
-                        }
-                        img => img,
-                    });
-                }
-                lines.extend(l);
+        let inner = match page.data.embedded.get(id) {
+            Some(inner) if !nested => {
+                post_lines(app, page, inner, w.saturating_sub(4), false, true)
             }
-            None => lines.push(Ln::Text(pad(Line::styled(
-                format!("[repost of #{id}]"),
-                dim(),
-            )))),
-        }
+            _ => vec![Ln::Text(Line::styled(format!("post #{id}"), dim()))],
+        };
+        lines.extend(boxed(&format!("repost of #{id}"), inner, w, dim()));
     }
     if let Some(api::Extension::Proposal(id)) = &p.extension {
-        lines.push(Ln::Text(pad(Line::styled(
-            format!("[proposal #{id}: open the post to vote]"),
-            Style::default().fg(WARN),
-        ))));
+        lines.push(Ln::Text(Line::styled(
+            format!(
+                "⚖ proposal #{id}{}",
+                if full {
+                    ""
+                } else {
+                    " · Enter: details and vote"
+                }
+            ),
+            Style::default().fg(WARN).add_modifier(Modifier::BOLD),
+        )));
     }
+    lines
+}
+
+/// A post as an entry; comments (`depth` > 0) hang off tree guides.
+pub fn post_entry(app: &App, page: &Page, it: &Item, w: usize, full: bool, depth: usize) -> Entry {
+    let guide = 2 * depth;
+    let lines = post_lines(app, page, it, w.saturating_sub(guide).max(20), full, false);
+    let lines = if depth > 0 {
+        let prefix: Vec<Span<'static>> = (0..depth).map(|_| Span::styled("│ ", dim())).collect();
+        indent(lines, &prefix)
+    } else {
+        lines
+    };
     Entry {
         lines,
-        target: Some(Target::Post(p.id)),
-        key: format!("p:{}", p.id),
+        target: Some(Target::Post(it.post.id)),
+        key: format!("p:{}", it.post.id),
     }
 }
 
 fn poll_lines(app: &App, p: &api::Post, poll: &api::Poll, w: usize) -> Vec<Line<'static>> {
-    let mut out = vec![Line::raw("")];
+    let mut out = vec![];
     let total: usize = poll.votes.values().map(|v| v.len()).sum();
     let mine = poll
         .votes
@@ -723,30 +1033,30 @@ fn poll_lines(app: &App, p: &api::Post, poll: &api::Poll, w: usize) -> Vec<Line<
         .find(|(_, v)| v.contains(&app.me()))
         .map(|(k, _)| *k);
     let deadline = p.timestamp + poll.deadline * 3_600_000_000_000;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    let now = now_ns();
     let open = now < deadline;
+    let show = !open || mine.is_some() || p.user == app.me();
+    let label_w = poll
+        .options
+        .iter()
+        .map(|o| width(o) + 6)
+        .max()
+        .unwrap_or(10)
+        .min(w.saturating_sub(24));
     for (i, o) in poll.options.iter().enumerate() {
         let n = poll.votes.get(&(i as u16)).map(|v| v.len()).unwrap_or(0);
         let pct = (n * 100).checked_div(total).unwrap_or(0);
-        let bar_w = 12;
-        let filled = pct * bar_w / 100;
         let mark = if mine == Some(i as u16) { "●" } else { " " };
-        let label = format!("{mark} {}. {}", i + 1, o);
-        let label = if label.chars().count() > w.saturating_sub(24) {
-            label.chars().take(w.saturating_sub(25)).collect::<String>() + "…"
-        } else {
-            label
-        };
-        let mut sp = vec![Span::raw(label)];
-        if !open || mine.is_some() || p.user == app.me() {
+        let label = fit(&format!("{mark} {}. {o}", i + 1), label_w);
+        let mut sp = vec![Span::raw(format!("{label:<label_w$}"))];
+        if show {
+            let bar_w = 12;
+            let filled = pct * bar_w / 100;
             sp.push(Span::styled(
                 format!("  {}{} ", "█".repeat(filled), "░".repeat(bar_w - filled)),
                 Style::default().fg(ACCENT),
             ));
-            sp.push(Span::styled(format!("{pct}% ({n})"), dim()));
+            sp.push(Span::styled(format!("{pct:>3}% ({n})"), dim()));
         }
         out.push(Line::from(sp));
     }
@@ -762,8 +1072,7 @@ fn poll_lines(app: &App, p: &api::Post, poll: &api::Poll, w: usize) -> Vec<Line<
     }
     if tokens > 0 {
         let dec = app.backend.token_decimals;
-        let best = poll.weighted_by_tokens.iter().max_by_key(|(_, v)| **v);
-        if let Some((k, v)) = best {
+        if let Some((k, v)) = poll.weighted_by_tokens.iter().max_by_key(|(_, v)| **v) {
             info += &format!(" · token-weighted lead: {} ({})", k + 1, amount(*v, dec));
         }
     }

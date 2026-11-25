@@ -90,6 +90,8 @@ pub struct Hits {
     pub page: Rect,
     /// First line index of each visible entry and its screen row, for clicks.
     pub entries: Vec<(usize, u16, u16)>,
+    /// Screen row and first column of the tab bar.
+    pub tabs: Option<(u16, u16)>,
 }
 
 pub struct App {
@@ -116,6 +118,8 @@ pub struct App {
     pub status: Option<(String, bool, Instant)>,
     pub hits: Hits,
     pub images: images::Images,
+    /// Posts whose pictures are shown.
+    pub expanded: std::collections::HashSet<PostId>,
     last_user_load: Instant,
     /// The signed-in user was loaded at least once.
     user_loaded: bool,
@@ -156,6 +160,7 @@ impl App {
             status: None,
             hits: Hits::default(),
             images,
+            expanded: Default::default(),
             last_user_load: Instant::now(),
             user_loaded: false,
             edit: None,
@@ -743,6 +748,23 @@ impl App {
                     }
                 } else if self.hits.page.contains(pos) {
                     self.focus = Focus::Page;
+                    if let Some((row, x0)) = self.hits.tabs
+                        && m.row == row
+                    {
+                        let col = m.column.saturating_sub(x0) as usize;
+                        let hit = self
+                            .pages
+                            .last()
+                            .and_then(|p| p.tab_row.as_ref())
+                            .and_then(|t| t.1.iter().position(|(a, b)| col >= *a && col < *b));
+                        if let Some(i) = hit
+                            && let Some(p) = self.page()
+                        {
+                            p.tab = i;
+                            self.tab_changed();
+                        }
+                        return;
+                    }
                     let hit = self
                         .hits
                         .entries

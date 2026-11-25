@@ -19,6 +19,8 @@ pub struct Config {
     pub icons: IconSet,
     /// Show pictures inside posts.
     pub images: bool,
+    /// Show pictures expanded instead of as a one-line placeholder (I toggles per post).
+    pub expand_images: bool,
     /// auto | kitty | sixel | iterm2 | halfblocks
     pub image_protocol: String,
     /// Where `s` saves pictures and other downloads.
@@ -33,6 +35,7 @@ impl Default for Config {
             domain: "6qfxa-ryaaa-aaaai-qbhsq-cai.icp.net".into(),
             icons: IconSet::Plain,
             images: true,
+            expand_images: false,
             image_protocol: "auto".into(),
             download_dir: dirs::download_dir()
                 .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Downloads")),
