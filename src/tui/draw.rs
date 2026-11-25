@@ -41,8 +41,6 @@ fn nav_icon(app: &App, n: &Nav) -> &'static str {
             Kind::Dashboard => "\u{f080}",
             Kind::Distribution => "\u{f1fe}",
             Kind::Domains => "\u{f0ac}",
-            Kind::Ethereum => "\u{f42e}",
-            Kind::Recovery => "\u{f1cd}",
             Kind::Links => "\u{f0c1}",
             Kind::Whitepaper => "\u{f15c}",
             _ => "",

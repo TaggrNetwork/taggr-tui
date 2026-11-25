@@ -43,8 +43,6 @@ pub enum Kind {
     Dashboard,
     Distribution,
     Domains,
-    Ethereum,
-    Recovery,
     Links,
     Whitepaper,
     /// A list of users (followers, follows, members…).
@@ -121,8 +119,6 @@ pub struct Data {
     pub numbers: BTreeMap<String, u64>,
     pub tokens: Vec<WalletToken>,
     pub auction: Option<(api::Auction, String)>,
-    pub eth: Option<(String, api::EthConfig, Vec<api::EthRecipe>)>,
-    pub strings: Vec<String>,
     pub loaded: bool,
 }
 
@@ -855,8 +851,8 @@ pub fn indent(lines: Vec<Ln>, prefix: &[Span<'static>]) -> Vec<Ln> {
         .collect()
 }
 
-/// The one-line head of a post: author, realm, age, comments, reactions.
-pub fn post_head(app: &App, it: &Item) -> Line<'static> {
+/// The one-line head of a post `w` wide: author, realm, age, comments; reactions on the right.
+pub fn post_head(app: &App, it: &Item, w: usize) -> Line<'static> {
     let p = &it.post;
     let mut sp = Vec::new();
     let me = app.me() == p.user;
@@ -890,10 +886,6 @@ pub fn post_head(app: &App, it: &Item) -> Line<'static> {
             format!("  {} {n}", ic(app, "\u{f075}", "↩")),
             dim(),
         ));
-    }
-    let reactions = reactions_line(p);
-    if !reactions.is_empty() {
-        sp.push(Span::raw(format!("  {reactions}")));
     }
     if !p.tips.is_empty() {
         sp.push(Span::styled(
@@ -938,6 +930,12 @@ pub fn post_head(app: &App, it: &Item) -> Line<'static> {
             format!("  {} {}", ic(app, "\u{f03e}", "▣"), p.files.len()),
             dim(),
         ));
+    }
+    let reactions = reactions_line(p);
+    if !reactions.is_empty() {
+        let used: usize = sp.iter().map(|s| s.width()).sum();
+        let gap = w.saturating_sub(used + width(&reactions)).max(2);
+        sp.push(Span::raw(format!("{}{reactions}", " ".repeat(gap))));
     }
     Line::from(sp)
 }
@@ -984,7 +982,7 @@ fn reactions_line(p: &api::Post) -> String {
 /// A post's lines `w` wide: head, body (preview or full), poll, repost, proposal.
 fn post_lines(app: &App, page: &Page, it: &Item, w: usize, full: bool, nested: bool) -> Vec<Ln> {
     let p = &it.post;
-    let mut lines = vec![Ln::Text(post_head(app, it))];
+    let mut lines = vec![Ln::Text(post_head(app, it, w))];
     if p.deleted() {
         lines.push(Ln::Text(Line::styled("[deleted]", dim())));
     } else if it.meta.viewer_blocked {
@@ -1625,33 +1623,6 @@ impl App {
                         p.data.loaded = true;
                         p.dirty();
                         app.want_names(ids);
-                    },
-                );
-            }
-            Kind::Ethereum => {
-                self.bg(
-                    |api| async move { api.eth().await },
-                    move |app, e: (String, api::EthConfig, Vec<api::EthRecipe>)| {
-                        let Some(i) = check(app) else { return };
-                        let p = &mut app.pages[i];
-                        p.data.eth = Some(e);
-                        p.loading = false;
-                        p.data.loaded = true;
-                        p.dirty();
-                    },
-                );
-            }
-            Kind::Recovery => {
-                self.bg(
-                    |api| async move { api.recovery_state().await },
-                    move |app, (status, supporters): (String, Vec<String>)| {
-                        let Some(i) = check(app) else { return };
-                        let p = &mut app.pages[i];
-                        p.data.text = status;
-                        p.data.strings = supporters;
-                        p.loading = false;
-                        p.data.loaded = true;
-                        p.dirty();
                     },
                 );
             }

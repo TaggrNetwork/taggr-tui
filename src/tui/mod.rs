@@ -260,11 +260,11 @@ impl App {
         if !self.principal.is_empty() {
             self.load_user();
         }
-        self.open_root(Kind::Hot, "Hot");
+        self.open_root(Kind::New, "New");
         if let Some(i) = self
             .nav
             .iter()
-            .position(|n| matches!(n, Nav::Go(Kind::Hot, _)))
+            .position(|n| matches!(n, Nav::Go(Kind::New, _)))
         {
             self.nav_sel = i;
         }
@@ -334,8 +334,8 @@ impl App {
         if self.user.is_some() {
             n.push(Nav::Go(Kind::Home, "Home".into()));
         }
-        n.push(Nav::Go(Kind::Hot, "Hot".into()));
         n.push(Nav::Go(Kind::New, "New".into()));
+        n.push(Nav::Go(Kind::Hot, "Hot".into()));
         if let Some(u) = &self.user {
             n.push(Nav::Go(Kind::Bookmarks, "Bookmarks".into()));
             for f in &u.feeds {
@@ -391,8 +391,6 @@ impl App {
             (Kind::Dashboard, "Dashboard"),
             (Kind::Distribution, "Distribution"),
             (Kind::Domains, "Domains"),
-            (Kind::Ethereum, "Ethereum"),
-            (Kind::Recovery, "Recovery"),
             (Kind::Links, "Links"),
             (Kind::Whitepaper, "Whitepaper"),
         ] {
@@ -628,7 +626,7 @@ impl App {
                     app.principal.clear();
                     app.user = None;
                     app.build_nav();
-                    app.open_root(Kind::Hot, "Hot");
+                    app.open_root(Kind::New, "New");
                     app.info("signed out");
                 }
                 Err(e) => app.error(e),

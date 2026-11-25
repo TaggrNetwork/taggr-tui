@@ -349,26 +349,6 @@ pub struct Auction {
     pub bids: Vec<Bid>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct EthConfig {
-    pub token_address: String,
-    pub chain_id: u64,
-    pub fee_credits: u64,
-    pub min_amount: u64,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default)]
-pub struct EthRecipe {
-    pub index: u64,
-    pub user_id: UserId,
-    pub eth_address: String,
-    pub amount: u64,
-    pub burn_block: u64,
-    pub signature: Vec<u8>,
-}
-
 /// Everything shared by all calls: the agent, the domain, and the canister config.
 pub struct Api {
     pub ic: Ic,
@@ -652,16 +632,6 @@ impl Api {
     pub async fn logs(&self) -> Result<Vec<Value>> {
         self.ic.query("logs", vec![]).await
     }
-    pub async fn recovery_state(&self) -> Result<(String, Vec<String>)> {
-        self.ic.query("recovery_state", vec![]).await
-    }
-    pub async fn eth(&self) -> Result<(String, EthConfig, Vec<EthRecipe>)> {
-        Ok((
-            self.ic.query("eth_address", vec![]).await?,
-            self.ic.query("eth_config", vec![]).await?,
-            self.ic.query("eth_recipes", vec![]).await?,
-        ))
-    }
     pub async fn validate_username(&self, name: &str) -> Result<()> {
         let v: Value = self
             .ic
@@ -747,18 +717,6 @@ impl Api {
             .candid_update(&self.ic.canister, "unlink_cold_wallet", ())
             .await?;
         r.into_result()
-    }
-
-    pub async fn set_emergency_release(&self, binary: Vec<u8>) -> Result<()> {
-        let () = self
-            .ic
-            .candid_update(
-                &self.ic.canister,
-                "set_emergency_release",
-                (serde_bytes::ByteBuf::from(binary),),
-            )
-            .await?;
-        Ok(())
     }
 
     pub async fn propose_release(

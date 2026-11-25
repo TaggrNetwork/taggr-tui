@@ -92,13 +92,13 @@ WRITING POSTS
   ~/.cache/taggr-tui/drafts until posted.
 
 PAGES
-  Feeds (Home, Hot, New, Bookmarks, followed tag feeds), realms, profiles and
+  Feeds (Home, New, Hot, Bookmarks, followed tag feeds), realms, profiles and
   journals, threads with all comments, inbox, wallet (ICP, credits, tokens,
   ICRC tokens, transactions), invites, settings (profile, noise filter, muted
   and blocked lists, storage canister, account suspension, principal change),
   search, proposals, tokens (holders, auction, transactions), dashboard,
-  distribution, domains, Ethereum bridge (recipes to submit on L1), recovery,
-  links and the white paper.
+  distribution, domains, links and the white paper.
 
   Not available: Internet Identity sign-in, linking a cold wallet (needs the
-  Plug extension), appearance settings of the web app.
+  Plug extension), the Ethereum bridge, recovery, appearance settings of the
+  web app.

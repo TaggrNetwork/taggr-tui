@@ -1629,7 +1629,7 @@ impl App {
                         app.load_user();
                         match realm.as_str() {
                             Some(r) if !r.is_empty() => app.open_root(Kind::Realm(r.to_string()), &format!("/{r}")),
-                            _ => app.open_root(Kind::Hot, "Hot"),
+                            _ => app.open_root(Kind::New, "New"),
                         }
                     },
                 );
@@ -2052,70 +2052,6 @@ impl App {
                         .await
                     },
                     "domain saved",
-                );
-                Ok(())
-            });
-        self.popup = Some(Popup::Form(f));
-    }
-
-    // ---- ethereum, recovery ------------------------------------------------------------------
-
-    pub fn bridge_form(&mut self) {
-        let dec = self.backend.token_decimals;
-        let sym = self.backend.token_symbol.clone();
-        let f = Form::new("Bridge out to Ethereum", "bridge")
-            .note("Burns the tokens here; you get a mint recipe to submit on L1. One-way.")
-            .field(Field::text("Ethereum address (0x…)", ""))
-            .field(Field::text(&format!("Amount ({sym})"), ""))
-            .on_submit(move |app, v| {
-                let addr = v[0].trim().to_string();
-                if !(addr.starts_with("0x") && addr.len() == 42) {
-                    return Err("enter a 0x… address".into());
-                }
-                let a = parse_amount(&v[1], dec)?;
-                app.confirm(
-                    format!("Burn {} and mint on Ethereum to {addr}?", amount(a, dec)),
-                    move |app| {
-                        app.act(
-                            move |api| async move {
-                                api.call("bridge_out", vec![json!(a), json!(addr)]).await
-                            },
-                            "bridged: the recipe is listed below",
-                        )
-                    },
-                );
-                Ok(())
-            });
-        self.popup = Some(Popup::Form(f));
-    }
-
-    pub fn emergency_binary_form(&mut self) {
-        let f = Form::new("Emergency release", "upload")
-            .field(Field::text("Binary (path to .wasm.gz)", ""))
-            .on_submit(|app, v| {
-                let bin = std::fs::read(shellexpand(v[0].trim())).map_err(|e| e.to_string())?;
-                app.act(
-                        move |api| async move {
-                            api.set_emergency_release(bin).await.map(|_| Value::Null)
-                        },
-                        "binary uploaded",
-                    );
-                Ok(())
-            });
-        self.popup = Some(Popup::Form(f));
-    }
-
-    pub fn confirm_hash_form(&mut self) {
-        let f = Form::new("Confirm emergency binary", "submit")
-            .field(Field::text("Build hash", ""))
-            .on_submit(|app, v| {
-                let h = v[0].trim().to_string();
-                app.act(
-                    move |api| async move {
-                        api.call_any("confirm_emergency_release", vec![json!(h)])
-                            .await
-                    },
-                    "hash submitted",
                 );
                 Ok(())
             });
