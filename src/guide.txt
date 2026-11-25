@@ -1,0 +1,101 @@
+taggr-tui: Taggr in the terminal
+
+USAGE
+  taggr-tui            start the TUI
+  taggr-tui --help     this text
+
+  Browsing works without signing in. To post, react and use the wallet, sign in
+  from the sidebar (Sign in) with the seed phrase you use on the web app's
+  "Seed Phrase" sign-in. The derived key (not the phrase) is kept in
+  ~/.local/share/taggr-tui/identity (mode 0600; TAGGR_TUI_IDENTITY overrides).
+  Sign out deletes it. Internet Identity accounts can't sign in here.
+
+  A new seed phrase is a new principal: the Welcome page shows it and lets you
+  join with an invite code or pay for credits with ICP.
+
+CONFIGURATION
+  ~/.config/taggr-tui/config.toml (TAGGR_TUI_CONFIG overrides); every key is optional.
+
+    canister = "6qfxa-ryaaa-aaaai-qbhsq-cai"   # Taggr canister
+    url = "https://icp-api.io"                # IC API; anything else is a local replica
+    domain = "6qfxa-ryaaa-aaaai-qbhsq-cai.icp.net"  # domain config used for realm filtering
+    icons = "plain"                           # or "nerd" (Nerd Font glyphs)
+    images = true                             # pictures inside posts
+    image_protocol = "auto"                   # kitty | sixel | iterm2 | halfblocks
+    download_dir = "~/Downloads"
+
+LAYOUT
+  Sidebar: feeds, your realms, your pages, Taggr pages. Right: the open page.
+  Enter opens what is selected (a post, user, realm, tag, notification or
+  ▸ button) on top of the page; Esc goes back.
+
+KEYS
+  Tab                    sidebar / page
+  j k  ↓ ↑               select (a long post scrolls first)
+  g G  PgUp PgDn Space   top / bottom / page
+  Enter  l               open
+  Esc  h                 back
+  [ ]                    tabs: realm New/Hot, profile Posts/Mentions/Rewarded,
+                         realms order, proposal types
+  s                      reload
+  /                      search (users, tags, realms, posts); in All realms:
+                         search realms
+  c  C                   new post / new poll (in the realm shown)
+  ?                      keys
+  q  Ctrl-C              quit
+
+  On a post:
+  r                      reply
+  +                      react (1-0 pick; cost and reward shown)
+  b  w  H  p             bookmark · watch · hide · pin to your profile
+  t  P  v                tip · repost · vote in the poll
+  e  D                   edit · delete (your posts; delete shows the cost)
+  i                      info: reactions by user, tips, versions
+  o  O                   links in the post · open the post in the browser
+  m                      move out of its realm (realm controllers)
+  A Z X                  proposal: accept · reject · cancel (yours)
+
+  On a user (profile, or a selected @user):
+  f M B                  follow · mute · block
+  $  !                   send credits · report to stalwarts
+  A Z                    a reported user: agree · disagree (stalwarts)
+
+  Realm: J join/leave · E edit (controllers) · M mute · c post here
+  All realms: n create · J join/leave
+  Tag feed: f follow the feed · M mute the tag
+  Inbox: Enter open · d dismiss · D clear all · w unwatch the post
+  Proposals: n new proposal
+  Settings: x removes a muted/blocked entry
+  Forms: Tab/↑↓ move · Space/←→ toggle · Enter next (last: submit) ·
+         Ctrl-S submit · Esc cancel · Enter on a multi-line field opens $EDITOR
+
+WRITING POSTS
+  Posts open in $VISUAL / $EDITOR. Top-level posts start with header lines, then
+  an empty line, then the Markdown body:
+
+    Realm: DAO
+    Deadline: 24          (polls: hours the poll stays open)
+    Option: Yes           (polls: one line per option)
+    Option: No
+
+    Body in **Markdown**, with @user, #tag, $TOKEN and /REALM links.
+
+  Replies have no headers. Four newlines split a post into teaser and rest.
+  Pictures: ![alt](~/path/to/picture.png) uploads the file to your storage
+  canister (Settings → Storage) when posting, shrunk to the size limit.
+
+  After the editor closes: y post · e edit again · Esc keep the draft for later ·
+  D discard. Unchanged drafts are discarded. Drafts live in
+  ~/.cache/taggr-tui/drafts until posted.
+
+PAGES
+  Feeds (Home, Hot, New, Bookmarks, followed tag feeds), realms, profiles and
+  journals, threads with all comments, inbox, wallet (ICP, credits, tokens,
+  ICRC tokens, transactions), invites, settings (profile, noise filter, muted
+  and blocked lists, storage canister, account suspension, principal change),
+  search, proposals, tokens (holders, auction, transactions), dashboard,
+  distribution, domains, Ethereum bridge (recipes to submit on L1), recovery,
+  links and the white paper.
+
+  Not available: Internet Identity sign-in, linking a cold wallet (needs the
+  Plug extension), appearance settings of the web app.
