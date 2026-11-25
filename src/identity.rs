@@ -22,16 +22,15 @@ pub fn identity_from_seed(seed: &[u8; 32]) -> BasicIdentity {
     BasicIdentity::from_raw_key(seed)
 }
 
-pub fn identity_from_phrase(phrase: &str) -> BasicIdentity {
-    identity_from_seed(&derive_seed(phrase))
-}
-
 pub fn principal_of(identity: &BasicIdentity) -> String {
     identity.sender().map(|p| p.to_text()).unwrap_or_default()
 }
 
 /// Persist a raw 32-byte seed as hex with 0600 permissions.
 pub fn write_seed(path: &Path, seed: &[u8; 32]) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
     std::fs::write(path, hex::encode(seed))
         .with_context(|| format!("writing {}", path.display()))?;
     #[cfg(unix)]
