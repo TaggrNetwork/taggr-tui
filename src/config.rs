@@ -33,7 +33,7 @@ impl Default for Config {
             canister: "6qfxa-ryaaa-aaaai-qbhsq-cai".into(),
             url: "https://icp-api.io".into(),
             domain: "6qfxa-ryaaa-aaaai-qbhsq-cai.icp.net".into(),
-            icons: IconSet::Plain,
+            icons: IconSet::Nerd,
             images: true,
             expand_images: false,
             image_protocol: "auto".into(),
@@ -46,8 +46,8 @@ impl Default for Config {
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum IconSet {
-    #[default]
     Plain,
+    #[default]
     Nerd,
 }
 

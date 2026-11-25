@@ -177,7 +177,7 @@ impl App {
             KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                 p.scroll(-(h as isize / 2))
             }
-            KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => self.enter(),
+            KeyCode::Enter => self.enter(),
             KeyCode::Esc if !p.query.is_empty() && matches!(p.kind, Kind::Realms) => {
                 p.query.clear();
                 self.reload();
@@ -211,6 +211,9 @@ impl App {
         let n = p.tab_row.as_ref().map(|t| t.1.len()).unwrap_or(1).max(1);
         p.tab %= n;
         p.sel_key.clear();
+        p.sel = 0;
+        p.off = 0;
+        p.more = false;
         p.items.clear();
         p.dirty();
         if !matches!(p.kind, Kind::Inbox) {

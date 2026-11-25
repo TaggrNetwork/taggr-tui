@@ -217,16 +217,6 @@ impl Page {
         if self.entries.is_empty() {
             return;
         }
-        let top = self.top_of(self.sel);
-        let h = self.entries[self.sel].height();
-        if d > 0 && top + h > self.off + view_h && h > view_h / 2 {
-            self.off = (self.off + view_h / 2).min(top + h - view_h.min(top + h));
-            return;
-        }
-        if d < 0 && top < self.off && h > view_h / 2 {
-            self.off = self.off.saturating_sub(view_h / 2).max(top);
-            return;
-        }
         let mut i = self.sel as isize;
         loop {
             i += d.signum();
@@ -756,9 +746,9 @@ fn blocks_with(
     let mut run: Option<(usize, usize)> = None; // (line index, pictures)
     let placeholder = |n: usize, alt: &str| {
         let what = if n == 1 {
-            format!("▣ {alt}")
+            format!("{} {alt}", ic(app, "\u{f03e}", "▣"))
         } else {
-            format!("▣ {n} pictures")
+            format!("{} {n} pictures", ic(app, "\u{f03e}", "▣"))
         };
         Ln::Text(Line::from(vec![
             Span::styled(what, Style::default().fg(ACCENT)),
@@ -817,7 +807,11 @@ fn blocks_with(
 /// Puts `inner` in a rounded box `w` wide titled `title`.
 pub fn boxed(title: &str, inner: Vec<Ln>, w: usize, st: Style) -> Vec<Ln> {
     let iw = w.saturating_sub(4);
-    let t = format!("─ {title} ");
+    let t = if title.is_empty() {
+        String::new()
+    } else {
+        format!("─ {title} ")
+    };
     let mut out = vec![Ln::Text(Line::from(vec![
         Span::styled("╭", st),
         Span::styled(t.clone(), st),
@@ -875,15 +869,27 @@ pub fn post_head(app: &App, it: &Item) -> Line<'static> {
         },
     ));
     if let Some(r) = &p.realm {
-        sp.push(Span::styled(format!("  /{r}"), Style::default().fg(WARN)));
+        sp.push(Span::styled(
+            format!("  {}/{r}", ic(app, "\u{f0c0} ", "")),
+            Style::default().fg(WARN),
+        ));
     }
-    sp.push(Span::styled(format!("  {}", ago(p.timestamp)), dim()));
+    sp.push(Span::styled(
+        format!("  {}{}", ic(app, "\u{f017} ", ""), ago(p.timestamp)),
+        dim(),
+    ));
     if p.parent.is_some() {
-        sp.push(Span::styled("  reply", dim()));
+        sp.push(Span::styled(
+            format!("  {}reply", ic(app, "\u{f112} ", "")),
+            dim(),
+        ));
     }
     let n = p.tree_size.max(p.children.len() as u64);
     if n > 0 {
-        sp.push(Span::styled(format!("  💬{n}"), dim()));
+        sp.push(Span::styled(
+            format!("  {} {n}", ic(app, "\u{f075}", "↩")),
+            dim(),
+        ));
     }
     let reactions = reactions_line(p);
     if !reactions.is_empty() {
@@ -891,31 +897,63 @@ pub fn post_head(app: &App, it: &Item) -> Line<'static> {
     }
     if !p.tips.is_empty() {
         sp.push(Span::styled(
-            format!("  ¤{}", p.tips.len()),
+            format!("  {} {}", ic(app, "\u{f51e}", "¤"), p.tips.len()),
             Style::default().fg(WARN),
         ));
     }
     if let Some(u) = &app.user {
         if u.bookmarks.contains(&p.id) {
-            sp.push(Span::styled("  ★", Style::default().fg(WARN)));
+            sp.push(Span::styled(
+                format!("  {}", ic(app, "\u{f02e}", "★")),
+                Style::default().fg(WARN),
+            ));
         }
         if p.watchers.contains(&u.id) {
-            sp.push(Span::styled("  ◉", dim()));
+            sp.push(Span::styled(
+                format!("  {}", ic(app, "\u{f06e}", "◉")),
+                dim(),
+            ));
         }
         if p.hidden_for.contains(&u.id) {
-            sp.push(Span::styled("  hidden", dim()));
+            sp.push(Span::styled(
+                format!("  {}hidden", ic(app, "\u{f070} ", "")),
+                dim(),
+            ));
         }
     }
     if !p.patches.is_empty() {
-        sp.push(Span::styled("  edited", dim()));
+        sp.push(Span::styled(
+            format!("  {}edited", ic(app, "\u{f040} ", "")),
+            dim(),
+        ));
     }
     if it.meta.nsfw {
-        sp.push(Span::styled("  NSFW", Style::default().fg(BAD)));
+        sp.push(Span::styled(
+            format!("  {}NSFW", ic(app, "\u{f071} ", "")),
+            Style::default().fg(BAD),
+        ));
     }
     if !p.files.is_empty() {
-        sp.push(Span::styled(format!("  ▣{}", p.files.len()), dim()));
+        sp.push(Span::styled(
+            format!("  {} {}", ic(app, "\u{f03e}", "▣"), p.files.len()),
+            dim(),
+        ));
     }
     Line::from(sp)
+}
+
+/// Nerd Font glyph, or the plain fallback with `icons = "plain"`.
+pub fn ic(app: &App, nerd: &'static str, plain: &'static str) -> &'static str {
+    if app.cfg.icons == crate::config::IconSet::Nerd {
+        nerd
+    } else {
+        plain
+    }
+}
+
+/// Style of the frame around posts; the selected post's frame is drawn in the accent colour.
+pub fn frame_style() -> Style {
+    Style::default().fg(Color::Gray)
 }
 
 pub fn reaction_icon(id: u16) -> &'static str {
@@ -938,9 +976,9 @@ fn reactions_line(p: &api::Post) -> String {
     p.reactions
         .iter()
         .filter(|(_, u)| !u.is_empty())
-        .map(|(id, u)| format!("{}{}", reaction_icon(*id), u.len()))
+        .map(|(id, u)| format!("{} {}", reaction_icon(*id), u.len()))
         .collect::<Vec<_>>()
-        .join(" ")
+        .join("  ")
 }
 
 /// A post's lines `w` wide: head, body (preview or full), poll, repost, proposal.
@@ -980,7 +1018,12 @@ fn post_lines(app: &App, page: &Page, it: &Item, w: usize, full: bool, nested: b
             .into_iter()
             .map(Ln::Text)
             .collect();
-        lines.extend(boxed("poll", inner, w, Style::default().fg(HEAD)));
+        lines.extend(boxed(
+            &format!("{}poll", ic(app, "\u{f080} ", "")),
+            inner,
+            w,
+            Style::default().fg(HEAD),
+        ));
     }
     if let Some(api::Extension::Repost(id)) = &p.extension {
         let inner = match page.data.embedded.get(id) {
@@ -989,12 +1032,18 @@ fn post_lines(app: &App, page: &Page, it: &Item, w: usize, full: bool, nested: b
             }
             _ => vec![Ln::Text(Line::styled(format!("post #{id}"), dim()))],
         };
-        lines.extend(boxed(&format!("repost of #{id}"), inner, w, dim()));
+        lines.extend(boxed(
+            &format!("{}repost of #{id}", ic(app, "\u{f079} ", "")),
+            inner,
+            w,
+            dim(),
+        ));
     }
     if let Some(api::Extension::Proposal(id)) = &p.extension {
         lines.push(Ln::Text(Line::styled(
             format!(
-                "⚖ proposal #{id}{}",
+                "{}proposal #{id}{}",
+                ic(app, "\u{f0e3} ", "⚖ "),
                 if full {
                     ""
                 } else {
@@ -1008,6 +1057,16 @@ fn post_lines(app: &App, page: &Page, it: &Item, w: usize, full: bool, nested: b
 }
 
 /// A post as an entry; comments (`depth` > 0) hang off tree guides.
+/// A post as a framed card (feeds, the open post).
+pub fn post_card(app: &App, page: &Page, it: &Item, w: usize, full: bool) -> Entry {
+    let lines = post_lines(app, page, it, w.saturating_sub(4).max(20), full, false);
+    Entry {
+        lines: boxed("", lines, w, frame_style()),
+        target: Some(Target::Post(it.post.id)),
+        key: format!("p:{}", it.post.id),
+    }
+}
+
 pub fn post_entry(app: &App, page: &Page, it: &Item, w: usize, full: bool, depth: usize) -> Entry {
     let guide = 2 * depth;
     let lines = post_lines(app, page, it, w.saturating_sub(guide).max(20), full, false);
@@ -1177,6 +1236,10 @@ impl App {
                     p.data.loaded = true;
                     p.more = items.len() >= size;
                     if more {
+                        // select the first newly loaded post, not the moved "load more" row
+                        if let Some(first) = items.first() {
+                            p.sel_key = format!("p:{}", first.post.id);
+                        }
                         p.pageno = pageno;
                         p.items.extend(items);
                     } else {

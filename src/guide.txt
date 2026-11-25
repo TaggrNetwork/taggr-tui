@@ -19,7 +19,7 @@ CONFIGURATION
     canister = "6qfxa-ryaaa-aaaai-qbhsq-cai"   # Taggr canister
     url = "https://icp-api.io"                # IC API; anything else is a local replica
     domain = "6qfxa-ryaaa-aaaai-qbhsq-cai.icp.net"  # domain config used for realm filtering
-    icons = "plain"                           # or "nerd" (Nerd Font glyphs)
+    icons = "nerd"                            # Nerd Font glyphs, or "plain"
     images = true                             # pictures inside posts
     expand_images = false                     # show pictures expanded (else I per post)
     image_protocol = "auto"                   # kitty | sixel | iterm2 | halfblocks
@@ -33,10 +33,10 @@ LAYOUT
 
 KEYS
   Tab                    sidebar / page
-  j k  ↓ ↑               select (a long post scrolls first)
+  j k  ↓ ↑               previous / next post or item
   g G  PgUp PgDn Space   top / bottom / page
-  Enter  l               open
-  Esc  h                 back
+  Enter                  open
+  Esc  h  ←              back (→ in the sidebar: to the page)
   1-9  [ ]  click        tabs: realm New/Hot, profile Posts/Mentions/Rewarded,
                          realms order, proposal types
   s                      reload
