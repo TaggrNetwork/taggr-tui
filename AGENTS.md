@@ -30,6 +30,14 @@ Do **not** run `nix profile install`, push, or touch the user's real `~/.config/
 Never sign in with a real seed phrase or call update methods on mainnet: they cost credits,
 move tokens and publish content. Write paths are tested against a local replica only.
 
+## Releases
+
+`.github/workflows/ci.yml` checks fmt, clippy, tests and the flake on every push. A push to
+`main` whose `Cargo.toml` version has no release yet publishes `v<version>`: static musl
+binaries for Linux x86_64/aarch64 and macOS binaries for aarch64/x86_64, with `.sha256` files.
+To release, bump the version. `install.sh` downloads the latest release (or uses the flake
+on NixOS); keep its asset names in step with the workflow.
+
 ## Running safely
 
 Read-only browsing of mainnet is anonymous and harmless. Sandbox every run so real files
