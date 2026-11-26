@@ -31,6 +31,8 @@ use std::time::{Duration, Instant};
 const STATUS: Duration = Duration::from_secs(5);
 /// How often the signed-in user (inbox, balances) is reloaded.
 const RELOAD_USER: Duration = Duration::from_secs(60);
+/// How often the shown page is reloaded.
+const RELOAD_PAGE: Duration = Duration::from_secs(180);
 
 /// A change applied to the app once a background call finishes.
 pub type Done = Box<dyn FnOnce(&mut App) + Send>;
@@ -662,6 +664,16 @@ impl App {
         }
         if self.user.is_some() && self.last_user_load.elapsed() > RELOAD_USER {
             self.load_user();
+        }
+        // Not while a popup is open, and not once more pages were loaded:
+        // a reload goes back to the first page.
+        if self.popup.is_none()
+            && self
+                .pages
+                .last()
+                .is_some_and(|p| !p.loading && p.pageno == 0 && p.loaded.elapsed() > RELOAD_PAGE)
+        {
+            self.reload();
         }
     }
 
