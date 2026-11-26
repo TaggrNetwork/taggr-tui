@@ -260,7 +260,13 @@ fn realm(o: &mut Out, p: &Page, id: &str) {
 }
 
 fn realms(o: &mut Out, p: &Page) {
-    o.tab_bar(&["Popularity", "Last update", "Name"], p.tab);
+    // Signed in, the first tab is the user's own realms.
+    let mine = o.app.user.is_some() && p.tab == 0;
+    if o.app.user.is_some() {
+        o.tab_bar(&["Mine", "Popularity", "Last update", "Name"], p.tab);
+    } else {
+        o.tab_bar(&["Popularity", "Last update", "Name"], p.tab);
+    }
     let mut acts: Vec<(String, Action2)> =
         vec![("search (/)".into(), act(|app| app.realm_search_prompt()))];
     if !p.query.is_empty() {
@@ -280,12 +286,26 @@ fn realms(o: &mut Out, p: &Page) {
     o.actions("realms", acts);
     o.blank();
     let me = o.app.user.as_ref();
+    let is_member = |id: &String| me.is_some_and(|u| u.realms.contains(id));
+    if mine && p.data.loaded && !p.data.realms.iter().any(|(id, _)| is_member(id)) {
+        o.text(Line::styled(
+            if p.query.is_empty() {
+                "You have not joined any realms yet: find some under Popularity (2)."
+            } else {
+                "None of your realms match."
+            },
+            dim(),
+        ));
+        return;
+    }
     let rows = p
         .data
         .realms
         .iter()
+        // a realm just left drops out of Mine once the user reloads
+        .filter(|(id, _)| !mine || is_member(id))
         .map(|(id, r)| {
-            let member = me.is_some_and(|u| u.realms.contains(id));
+            let member = is_member(id);
             (
                 format!("r:{id}"),
                 vec![

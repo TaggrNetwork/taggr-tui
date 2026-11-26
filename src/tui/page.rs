@@ -1352,8 +1352,49 @@ impl App {
                     },
                 );
             }
+            Kind::Realms if tab == 0 && self.user.is_some() => {
+                // Mine: the user's realms, most recently active first; the
+                // search query filters them by name.
+                let q = query.to_lowercase();
+                let ids: Vec<String> = self
+                    .user
+                    .as_ref()
+                    .map(|u| u.realms.clone())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|id| id.to_lowercase().contains(&q))
+                    .collect();
+                self.bg(
+                    move |api| async move {
+                        // `realms` skips unknown ids, so pair them by asking
+                        // one by one when some are missing.
+                        let rs = api.realms(&ids).await?;
+                        if rs.len() == ids.len() {
+                            return Ok(ids.into_iter().zip(rs).collect());
+                        }
+                        let mut out = Vec::new();
+                        for id in ids {
+                            if let Some(r) = api.realms(std::slice::from_ref(&id)).await?.pop() {
+                                out.push((id, r));
+                            }
+                        }
+                        Ok(out)
+                    },
+                    move |app, mut rs: Vec<(String, Realm)>| {
+                        let Some(i) = check(app) else { return };
+                        rs.sort_by_key(|r| std::cmp::Reverse(r.1.last_update));
+                        let p = &mut app.pages[i];
+                        p.more = false;
+                        p.loading = false;
+                        p.data.loaded = true;
+                        p.data.realms = rs;
+                        p.dirty();
+                    },
+                );
+            }
             Kind::Realms => {
-                let order = ["popularity", "last_update", "name"][tab % 3];
+                let orders = ["popularity", "last_update", "name"];
+                let order = orders[(tab - self.user.is_some() as usize) % 3];
                 let q = query.clone();
                 self.bg(
                     move |api| async move {

@@ -288,6 +288,10 @@ impl App {
                 app.user_loaded = true;
                 app.user = u;
                 app.build_nav();
+                // pages that show membership (e.g. Realms → Mine)
+                if let Some(p) = app.pages.last_mut() {
+                    p.dirty();
+                }
                 if first {
                     app.reload();
                 } else if unregistered && app.pages.len() == 1 {
@@ -338,6 +342,7 @@ impl App {
         }
         n.push(Nav::Go(Kind::New, "New".into()));
         n.push(Nav::Go(Kind::Hot, "Hot".into()));
+        n.push(Nav::Go(Kind::Realms, "Realms".into()));
         if let Some(u) = &self.user {
             n.push(Nav::Go(Kind::Bookmarks, "Bookmarks".into()));
             for f in &u.feeds {
@@ -350,16 +355,6 @@ impl App {
                 ));
             }
         }
-        n.push(Nav::Spacer);
-        n.push(Nav::Header("Realms"));
-        if let Some(u) = &self.user {
-            let mut r = u.realms.clone();
-            r.sort();
-            for id in r {
-                n.push(Nav::Go(Kind::Realm(id.clone()), format!("/{id}")));
-            }
-        }
-        n.push(Nav::Go(Kind::Realms, "All realms".into()));
         n.push(Nav::Spacer);
         match &self.user {
             Some(u) => {

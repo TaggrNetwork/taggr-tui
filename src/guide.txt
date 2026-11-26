@@ -33,7 +33,7 @@ CONFIGURATION
     download_dir = "~/Downloads"
 
 LAYOUT
-  Sidebar: feeds, your realms, your pages, Taggr pages. Right: the open page.
+  Sidebar: feeds, realms, your pages, Taggr pages. Right: the open page.
   Enter opens what is selected (a post, user, realm, tag, notification or
   ▸ button) on top of the page; Esc goes back. A row of ▸ actions opens a menu
   of them; the bottom line always lists the keys for what is selected.
@@ -45,10 +45,10 @@ KEYS
   Enter                  open
   Esc  h  ←              back (→ in the sidebar: to the page)
   1-9  [ ]  click        tabs: realm New/Hot, profile Posts/Mentions/Rewarded,
-                         realms order, proposal types
+                         realms Mine/order, proposal types
   s                      reload (the shown page also reloads every 3 minutes)
-  /                      search (users, tags, realms, posts); in All realms:
-                         search realms
+  /                      search (users, tags, realms, posts); on Realms:
+                         search realms (Mine: filter your realms)
   c  C                   new post / new poll (in the realm shown)
   ?                      keys
   q  Ctrl-C              quit
@@ -71,7 +71,8 @@ KEYS
   A Z                    a reported user: agree · disagree (stalwarts)
 
   Realm: J join/leave · E edit (controllers) · M mute · c post here
-  All realms: n create · J join/leave
+  Realms: Mine (signed in) · Popularity · Last update · Name; n create ·
+          J join/leave
   Tag feed: f follow the feed · M mute the tag
   Inbox: Enter open · d dismiss · D clear all · w unwatch the post
   Proposals: n new proposal

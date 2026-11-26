@@ -694,7 +694,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
             "switch tabs (realms, profiles, proposals); tabs are clickable",
         ),
         ("s", "reload the page"),
-        ("/", "search (in All realms: search realms)"),
+        ("/", "search (on Realms: search realms)"),
         ("c  C", "new post / new poll (in the shown realm)"),
         ("", ""),
         ("r", "post: reply"),
