@@ -13,6 +13,13 @@ USAGE
   A new seed phrase is a new principal: the Welcome page shows it and lets you
   join with an invite code or pay for credits with ICP.
 
+INSTALL
+  curl -fsSL https://raw.githubusercontent.com/TaggrNetwork/taggr-tui/main/install.sh | sh
+
+  Installs the latest release to ~/.local/bin (TAGGR_TUI_INSTALL_DIR overrides);
+  Linux and macOS, x86_64 and aarch64. On NixOS it runs nix profile add with the
+  flake instead.
+
 CONFIGURATION
   ~/.config/taggr-tui/config.toml (TAGGR_TUI_CONFIG overrides); every key is optional.
 
