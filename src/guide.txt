@@ -100,7 +100,7 @@ WRITING POSTS
   ~/.cache/taggr-tui/drafts until posted.
 
 PAGES
-  Feeds (Home, New, Hot, Bookmarks, followed tag feeds), realms, profiles and
+  Feeds (Home, New, Hot, Bookmarks, tag feeds), realms, profiles and
   journals, threads with all comments, inbox, wallet (ICP, credits, tokens,
   ICRC tokens, transactions), invites, settings (profile, noise filter, muted
   and blocked lists, storage canister, account suspension, principal change),

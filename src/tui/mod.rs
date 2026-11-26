@@ -343,17 +343,8 @@ impl App {
         n.push(Nav::Go(Kind::New, "New".into()));
         n.push(Nav::Go(Kind::Hot, "Hot".into()));
         n.push(Nav::Go(Kind::Realms, "Realms".into()));
-        if let Some(u) = &self.user {
+        if self.user.is_some() {
             n.push(Nav::Go(Kind::Bookmarks, "Bookmarks".into()));
-            for f in &u.feeds {
-                n.push(Nav::Go(
-                    Kind::Tags(f.clone()),
-                    f.iter()
-                        .map(|t| format!("#{t}"))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                ));
-            }
         }
         n.push(Nav::Spacer);
         match &self.user {

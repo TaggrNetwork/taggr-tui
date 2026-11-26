@@ -1290,46 +1290,6 @@ fn tokens(o: &mut Out, p: &Page) {
     o.kv("ICP per 1 XDR", icp(n("e8s_for_one_xdr")));
     o.kv("ICP per 1k credits", icp(n("e8s_revenue_per_1k")));
     o.kv("Last weekly chores", ago(n("last_weekly_chores")));
-    if let Some((a, account)) = &p.data.auction {
-        o.heading("Upcoming auction");
-        o.kv("Tokens", amount(a.amount, dec));
-        o.kv("Your deposit account", account.clone());
-        o.note("Bids are paid in ICP from your wallet; tokens are sold at the next weekly chores to the highest bids.");
-        if app.user.is_some() {
-            let mut acts: Vec<(String, Action2)> = vec![("bid".into(), act(|app| app.bid_form()))];
-            if a.bids.iter().any(|b| b.user == app.me()) {
-                acts.push(("cancel my bid".into(), act(|app| app.cancel_bid())));
-            }
-            o.actions("auction", acts);
-        }
-        if !a.bids.is_empty() {
-            let rows = a
-                .bids
-                .iter()
-                .map(|b| {
-                    (
-                        format!("bid:{}", b.user),
-                        vec![
-                            (format!("@{}", app.name(b.user)), accent()),
-                            (amount(b.amount, dec), Style::default()),
-                            (icp(b.e8s_per_token * 10u64.pow(dec)), Style::default()),
-                            (ago(b.timestamp), dim()),
-                        ],
-                        Some(Target::UserId(b.user)),
-                    )
-                })
-                .collect();
-            o.table(
-                &[
-                    ("bidder", false),
-                    ("tokens", true),
-                    ("ICP per token", true),
-                    ("when", true),
-                ],
-                rows,
-            );
-        }
-    }
     o.heading("Top token holders");
     if let Some(b) = s["balances"].as_array() {
         let circ = n("circulating_supply").max(1);
@@ -1371,6 +1331,46 @@ fn tokens(o: &mut Out, p: &Page) {
             ],
             rows,
         );
+    }
+    if let Some((a, account)) = &p.data.auction {
+        o.heading("Upcoming auction");
+        o.kv("Tokens", amount(a.amount, dec));
+        o.kv("Your deposit account", account.clone());
+        o.note("Bids are paid in ICP from your wallet; tokens are sold at the next weekly chores to the highest bids.");
+        if app.user.is_some() {
+            let mut acts: Vec<(String, Action2)> = vec![("bid".into(), act(|app| app.bid_form()))];
+            if a.bids.iter().any(|b| b.user == app.me()) {
+                acts.push(("cancel my bid".into(), act(|app| app.cancel_bid())));
+            }
+            o.actions("auction", acts);
+        }
+        if !a.bids.is_empty() {
+            let rows = a
+                .bids
+                .iter()
+                .map(|b| {
+                    (
+                        format!("bid:{}", b.user),
+                        vec![
+                            (format!("@{}", app.name(b.user)), accent()),
+                            (amount(b.amount, dec), Style::default()),
+                            (icp(b.e8s_per_token * 10u64.pow(dec)), Style::default()),
+                            (ago(b.timestamp), dim()),
+                        ],
+                        Some(Target::UserId(b.user)),
+                    )
+                })
+                .collect();
+            o.table(
+                &[
+                    ("bidder", false),
+                    ("tokens", true),
+                    ("ICP per token", true),
+                    ("when", true),
+                ],
+                rows,
+            );
+        }
     }
     o.heading("Latest transactions");
     txs(o, &p.data.txs);

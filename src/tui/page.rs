@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 pub const DIM: Color = Color::DarkGray;
-pub const ACCENT: Color = Color::Cyan;
+pub const ACCENT: Color = Color::Green;
 pub const HEAD: Color = Color::Blue;
 pub const WARN: Color = Color::Yellow;
 pub const GOOD: Color = Color::Green;
@@ -75,8 +75,15 @@ pub fn run(f: impl Fn(&mut App) + 'static) -> Target {
 
 pub enum Ln {
     Text(Line<'static>),
-    /// Picture: url, rows it takes, alt, columns it is indented by.
-    Image(String, u16, String, u16),
+    /// Picture `width` columns wide between `left` and `right` decorations (frames, guides).
+    Image {
+        url: String,
+        rows: u16,
+        alt: String,
+        width: u16,
+        left: Vec<Span<'static>>,
+        right: Vec<Span<'static>>,
+    },
 }
 
 pub struct Entry {
@@ -92,7 +99,7 @@ impl Entry {
             .iter()
             .map(|l| match l {
                 Ln::Text(_) => 1,
-                Ln::Image(_, h, _, _) => *h as usize,
+                Ln::Image { rows, .. } => *rows as usize,
             })
             .sum()
     }
@@ -779,12 +786,14 @@ fn blocks_with(
                     alt
                 };
                 if expand && app.images.enabled() && url.starts_with("http") {
-                    out.push(Ln::Image(
-                        url.clone(),
-                        app.images.rows(&url, w as u16),
+                    out.push(Ln::Image {
+                        rows: app.images.rows(&url, w as u16),
+                        url,
                         alt,
-                        0,
-                    ));
+                        width: w as u16,
+                        left: vec![],
+                        right: vec![],
+                    });
                     continue;
                 }
                 match run {
@@ -828,7 +837,30 @@ pub fn boxed(title: &str, inner: Vec<Ln>, w: usize, st: Style) -> Vec<Ln> {
                 sp.push(Span::styled(" │", st));
                 Ln::Text(Line::from(sp))
             }
-            Ln::Image(u, r, a, x) => Ln::Image(u, r, a, x + 2),
+            Ln::Image {
+                url,
+                rows,
+                alt,
+                width,
+                mut left,
+                right: inner_right,
+            } => {
+                let used = left.iter().map(|s| s.width()).sum::<usize>()
+                    + width as usize
+                    + inner_right.iter().map(|s| s.width()).sum::<usize>();
+                left.insert(0, Span::styled("│ ", st));
+                let mut right = inner_right;
+                right.push(Span::raw(" ".repeat(iw.saturating_sub(used))));
+                right.push(Span::styled(" │", st));
+                Ln::Image {
+                    url,
+                    rows,
+                    alt,
+                    width,
+                    left,
+                    right,
+                }
+            }
         });
     }
     out.push(Ln::Text(Line::from(vec![
@@ -841,7 +873,6 @@ pub fn boxed(title: &str, inner: Vec<Ln>, w: usize, st: Style) -> Vec<Ln> {
 
 /// Prefixes every line with `prefix` (images move right by its width).
 pub fn indent(lines: Vec<Ln>, prefix: &[Span<'static>]) -> Vec<Ln> {
-    let pw: usize = prefix.iter().map(|s| s.width()).sum();
     lines
         .into_iter()
         .map(|l| match l {
@@ -850,7 +881,25 @@ pub fn indent(lines: Vec<Ln>, prefix: &[Span<'static>]) -> Vec<Ln> {
                 sp.extend(t.spans);
                 Ln::Text(Line::from(sp))
             }
-            Ln::Image(u, r, a, x) => Ln::Image(u, r, a, x + pw as u16),
+            Ln::Image {
+                url,
+                rows,
+                alt,
+                width,
+                left,
+                right,
+            } => {
+                let mut l = prefix.to_vec();
+                l.extend(left);
+                Ln::Image {
+                    url,
+                    rows,
+                    alt,
+                    width,
+                    left: l,
+                    right,
+                }
+            }
         })
         .collect()
 }
@@ -1074,7 +1123,12 @@ pub fn post_entry(app: &App, page: &Page, it: &Item, w: usize, full: bool, depth
     let lines = post_lines(app, page, it, w.saturating_sub(guide).max(20), full, false);
     let lines = if depth > 0 {
         let prefix: Vec<Span<'static>> = (0..depth).map(|_| Span::styled("│ ", dim())).collect();
-        indent(lines, &prefix)
+        let mut lines = indent(lines, &prefix);
+        // the head branches off the parent's guide towards the author's name
+        if let Some(Ln::Text(head)) = lines.first_mut() {
+            head.spans[depth - 1] = Span::styled("├─", dim());
+        }
+        lines
     } else {
         lines
     };

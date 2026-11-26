@@ -224,7 +224,27 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
         if page.tab_row.as_ref().is_some_and(|t| t.0 == i) && y >= page.off {
             app.hits.tabs = Some((inner.y + top as u16, inner.x + 2));
         }
-        let bar = if sel && focused {
+        // a selected post card shows by its heavy frame instead of the bar
+        let fs = super::page::frame_style();
+        let card = e.lines.first().is_some_and(
+            |l| matches!(l, Ln::Text(t) if t.spans.first().is_some_and(|s| s.style == fs)),
+        );
+        let heavy = sel && card;
+        let frame_span = |s: &Span<'static>| -> Span<'static> {
+            if !heavy || s.style != fs {
+                return Span::styled(plain_width(&s.content), s.style);
+            }
+            let c: String = s.content.chars().map(heavy_frame).collect();
+            let st = if focused {
+                Style::default().fg(ACCENT)
+            } else {
+                fs
+            };
+            Span::styled(c, st.add_modifier(Modifier::BOLD))
+        };
+        let bar = if heavy {
+            Span::raw("  ")
+        } else if sel && focused {
             Span::styled("▌ ", Style::default().fg(ACCENT))
         } else if sel {
             Span::styled("▏ ", dim())
@@ -234,7 +254,7 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
         for l in &e.lines {
             let lh = match l {
                 Ln::Text(_) => 1,
-                Ln::Image(_, r, _, _) => *r as usize,
+                Ln::Image { rows, .. } => *rows as usize,
             };
             if y + lh <= page.off || y >= page.off + h {
                 y += lh;
@@ -244,15 +264,9 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
             match l {
                 Ln::Text(t) => {
                     let mut sp = vec![bar.clone()];
-                    // the selected post's frame lights up
-                    let lit = sel && focused;
+                    // spans inherit the line's own style (`Line::styled`)
                     sp.extend(t.spans.iter().map(|s| {
-                        let st = if lit && s.style == super::page::frame_style() {
-                            Style::default().fg(ACCENT)
-                        } else {
-                            s.style
-                        };
-                        Span::styled(plain_width(&s.content), st)
+                        frame_span(&Span::styled(s.content.clone(), t.style.patch(s.style)))
                     }));
                     let mut line = Line::from(sp);
                     // one-line selectable rows get a full highlight
@@ -265,29 +279,43 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
                         Rect::new(inner.x, row, inner.width, 1),
                     );
                 }
-                Ln::Image(url, rows, alt, ind) => {
+                Ln::Image {
+                    url,
+                    rows,
+                    alt,
+                    width,
+                    left,
+                    right,
+                } => {
                     let fully = y >= page.off && y + lh <= page.off + h;
-                    for r in 0..lh {
-                        let ry = y + r;
+                    let deco = |spans: &[Span<'static>]| -> Line<'static> {
+                        Line::from(spans.iter().map(frame_span).collect::<Vec<_>>())
+                    };
+                    let lw: u16 = left.iter().map(|s| s.width() as u16).sum();
+                    let ix = inner.x + 2 + lw;
+                    let mut l = vec![bar.clone()];
+                    l.extend(deco(left).spans);
+                    let l = Line::from(l);
+                    let r = deco(right);
+                    for k in 0..lh {
+                        let ry = y + k;
                         if ry >= page.off && ry < page.off + h {
                             let rr = inner.y + (ry - page.off) as u16;
                             f.render_widget(
-                                Paragraph::new(Line::from(bar.clone())),
-                                Rect::new(inner.x, rr, 2, 1),
+                                Paragraph::new(l.clone()),
+                                Rect::new(inner.x, rr, 2 + lw, 1),
                             );
+                            let rx = ix + width;
+                            if rx < inner.x + inner.width {
+                                f.render_widget(
+                                    Paragraph::new(r.clone()),
+                                    Rect::new(rx, rr, inner.x + inner.width - rx, 1),
+                                );
+                            }
                         }
                     }
                     if fully && !app.images.failed(url) {
-                        imgs.push((
-                            url.clone(),
-                            Rect::new(
-                                inner.x + 2 + ind,
-                                row,
-                                (w as u16).saturating_sub(*ind),
-                                *rows,
-                            ),
-                            alt.clone(),
-                        ));
+                        imgs.push((url.clone(), Rect::new(ix, row, *width, *rows), alt.clone()));
                     } else {
                         let label = if app.images.failed(url) {
                             format!("[picture {alt} (not loaded)]")
@@ -296,7 +324,7 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
                         };
                         f.render_widget(
                             Paragraph::new(Line::styled(label, dim())),
-                            Rect::new(inner.x + 2 + ind, row, (w as u16).saturating_sub(*ind), 1),
+                            Rect::new(ix, row, *width, 1),
                         );
                     }
                 }
@@ -746,4 +774,17 @@ fn draw_help(f: &mut Frame, area: Rect) {
     let r = centered(area, 92, lines.len() as u16 + 2);
     f.render_widget(Clear, r);
     f.render_widget(Paragraph::new(lines).block(popup_block("Keys")), r);
+}
+
+/// The heavy counterpart of a rounded frame character.
+fn heavy_frame(c: char) -> char {
+    match c {
+        '╭' => '┏',
+        '╮' => '┓',
+        '╰' => '┗',
+        '╯' => '┛',
+        '─' => '━',
+        '│' => '┃',
+        c => c,
+    }
 }
