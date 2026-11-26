@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
+use std::time::Instant;
 
 pub const DIM: Color = Color::DarkGray;
 pub const ACCENT: Color = Color::Cyan;
@@ -134,6 +135,8 @@ pub struct Page {
     pub offset: PostId,
     pub more: bool,
     pub loading: bool,
+    /// When the page was last (re)loaded, for the periodic refresh.
+    pub loaded: Instant,
     pub entries: Vec<Entry>,
     pub built: Option<u16>,
     pub sel: usize,
@@ -164,6 +167,7 @@ impl Page {
             offset: 0,
             more: false,
             loading: false,
+            loaded: Instant::now(),
             entries: Vec::new(),
             built: None,
             sel: 0,
@@ -1189,6 +1193,7 @@ impl App {
         let tab = p.tab;
         let query = p.query.clone();
         p.loading = true;
+        p.loaded = Instant::now();
         let bookmarks = self
             .user
             .as_ref()

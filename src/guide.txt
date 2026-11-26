@@ -39,7 +39,7 @@ KEYS
   Esc  h  ←              back (→ in the sidebar: to the page)
   1-9  [ ]  click        tabs: realm New/Hot, profile Posts/Mentions/Rewarded,
                          realms order, proposal types
-  s                      reload
+  s                      reload (the shown page also reloads every 3 minutes)
   /                      search (users, tags, realms, posts); in All realms:
                          search realms
   c  C                   new post / new poll (in the realm shown)
