@@ -225,8 +225,7 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
     let block = pane(Line::from(title), focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
-    // two columns for the selection bar
-    let w = inner.width.saturating_sub(2) as usize;
+    let w = inner.width as usize;
     if page.built != Some(inner.width) {
         let (entries, tabs) = super::view::build(app, &page, w);
         page.entries = entries;
@@ -256,9 +255,9 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
         let vis = (y + eh).min(page.off + h) - y.max(page.off);
         app.hits.entries.push((i, inner.y + top as u16, vis as u16));
         if page.tab_row.as_ref().is_some_and(|t| t.0 == i) && y >= page.off {
-            app.hits.tabs = Some((inner.y + top as u16, inner.x + 2));
+            app.hits.tabs = Some((inner.y + top as u16, inner.x));
         }
-        // a selected post card shows by its frame colour instead of the bar
+        // a selected post card shows by its frame colour
         let fs = super::page::frame_style();
         let card = e.lines.first().is_some_and(|l| {
             matches!(l, Ln::Text(t) if t.spans.iter().any(|s| s.style == fs && s.content.starts_with('╭')))
@@ -268,17 +267,18 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
             if !lit || s.style != fs {
                 return Span::styled(plain_width(&s.content), s.style);
             }
-            let fg = if focused { ACCENT } else { Color::White };
-            Span::styled(s.content.clone(), Style::default().fg(fg))
+            let fg = if focused { ACCENT } else { Color::Gray };
+            Span::styled(
+                s.content.clone(),
+                Style::default().fg(fg).add_modifier(Modifier::BOLD),
+            )
         };
-        let bar = if lit {
-            Span::raw("  ")
-        } else if sel && focused {
-            Span::styled("▌ ", Style::default().fg(ACCENT))
-        } else if sel {
-            Span::styled("▏ ", dim())
+        // other selected entries are highlighted rows, as in mailbox and organiser
+        let row_sel = sel && !card;
+        let row_style = if focused {
+            Style::default().fg(Color::Black).bg(ACCENT)
         } else {
-            Span::raw("  ")
+            Style::default().add_modifier(Modifier::REVERSED)
         };
         for l in &e.lines {
             let lh = match l {
@@ -292,16 +292,23 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
             let row = inner.y + (y.max(page.off) - page.off) as u16;
             match l {
                 Ln::Text(t) => {
-                    let mut sp = vec![bar.clone()];
                     // spans inherit the line's own style (`Line::styled`)
-                    sp.extend(t.spans.iter().map(|s| {
-                        frame_span(&Span::styled(s.content.clone(), t.style.patch(s.style)))
-                    }));
+                    let sp: Vec<Span> = t
+                        .spans
+                        .iter()
+                        .map(|s| {
+                            let s = Span::styled(s.content.clone(), t.style.patch(s.style));
+                            if row_sel {
+                                Span::styled(plain_width(&s.content), s.style.patch(row_style))
+                            } else {
+                                frame_span(&s)
+                            }
+                        })
+                        .collect();
                     let mut line = Line::from(sp);
-                    // one-line selectable rows get a full highlight
-                    if sel && focused && e.lines.len() == 1 && e.target.is_some() {
-                        line = line.style(Style::default().add_modifier(Modifier::REVERSED));
-                        line.spans[0] = Span::styled("▌ ", Style::default().fg(ACCENT));
+                    if row_sel {
+                        let pad = (inner.width as usize).saturating_sub(line.width());
+                        line.spans.push(Span::styled(" ".repeat(pad), row_style));
                     }
                     f.render_widget(
                         Paragraph::new(line),
@@ -321,10 +328,8 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
                         Line::from(spans.iter().map(frame_span).collect::<Vec<_>>())
                     };
                     let lw: u16 = left.iter().map(|s| s.width() as u16).sum();
-                    let ix = inner.x + 2 + lw;
-                    let mut l = vec![bar.clone()];
-                    l.extend(deco(left).spans);
-                    let l = Line::from(l);
+                    let ix = inner.x + lw;
+                    let l = deco(left);
                     let r = deco(right);
                     for k in 0..lh {
                         let ry = y + k;
@@ -332,7 +337,7 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
                             let rr = inner.y + (ry - page.off) as u16;
                             f.render_widget(
                                 Paragraph::new(l.clone()),
-                                Rect::new(inner.x, rr, 2 + lw, 1),
+                                Rect::new(inner.x, rr, lw, 1),
                             );
                             let rx = ix + width;
                             if rx < inner.x + inner.width {

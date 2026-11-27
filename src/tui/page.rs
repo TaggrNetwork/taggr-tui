@@ -1003,8 +1003,10 @@ pub fn ic(app: &App, nerd: &'static str, plain: &'static str) -> &'static str {
 }
 
 /// Style of the frame around posts; the selected post's frame is drawn in the accent colour.
+/// Indexed(8) is the same dark grey as `dim()` on screen, but compares unequal, so `draw`
+/// lights up only frames and not the comment guides next to them.
 pub fn frame_style() -> Style {
-    Style::default().fg(Color::Gray)
+    Style::default().fg(Color::Indexed(8))
 }
 
 pub fn reaction_icon(id: u16) -> &'static str {
