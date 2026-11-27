@@ -3,6 +3,7 @@ mod config;
 mod ic;
 mod identity;
 mod markdown;
+mod pgp;
 mod storage;
 mod tui;
 

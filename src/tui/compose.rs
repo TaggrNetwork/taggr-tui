@@ -1,7 +1,7 @@
 //! Writing posts in $EDITOR: templates, parsing, picture upload, the send prompt.
 
 use super::page::Kind;
-use super::{App, Popup};
+use super::{App, Field, Form, Popup};
 use crate::api::{self, Api, Extension, Poll, PostId};
 use anyhow::{Result, anyhow, bail};
 use diff_match_patch_rs::{Compat, DiffMatchPatch, PatchInput};
@@ -28,6 +28,8 @@ pub struct Draft {
     /// Parsed after editing.
     pub body: String,
     pub poll: Option<Poll>,
+    /// Recipients the body was encrypted to; editing again starts from the plain text.
+    pub encrypted: Option<Vec<String>>,
 }
 
 pub fn scratch_file(name: &str) -> PathBuf {
@@ -51,6 +53,7 @@ impl Draft {
             template,
             body: String::new(),
             poll: None,
+            encrypted: None,
         }
     }
 
@@ -107,6 +110,7 @@ impl Draft {
 
     /// Reads the edited file: headers (top-level posts) then the body.
     fn parse(&mut self, text: &str) -> Result<()> {
+        self.encrypted = None;
         let mut body = text;
         let mut poll = Poll {
             deadline: 24,
@@ -188,6 +192,7 @@ pub fn edited(app: &mut App, mut d: Draft) {
 pub fn send_key(app: &mut App, d: Draft, scroll: u16, k: KeyEvent) {
     match k.code {
         KeyCode::Char('y') => post(app, d),
+        KeyCode::Char('x') => encrypt_form(app, d, scroll),
         KeyCode::Char('e') => app.edit = Some(d),
         KeyCode::Char('d') | KeyCode::Esc => {
             app.info(format!("draft kept in {}", d.file.display()));
@@ -204,6 +209,64 @@ pub fn send_key(app: &mut App, d: Draft, scroll: u16, k: KeyEvent) {
         KeyCode::PageUp => app.popup = Some(Popup::Send(d, scroll.saturating_sub(10))),
         _ => app.popup = Some(Popup::Send(d, scroll)),
     }
+}
+
+/// Ask for recipients and encrypt the draft's body with gpg; Esc goes back to the prompt.
+fn encrypt_form(app: &mut App, d: Draft, scroll: u16) {
+    let why = if d.encrypted.is_some() {
+        Some("already encrypted; e: edit to start from the plain text")
+    } else if d.poll.is_some() {
+        Some("polls can't be encrypted: the options would stay public")
+    } else if !local_images(&d.body).is_empty() {
+        Some("pictures can't be encrypted: remove the local pictures first")
+    } else {
+        None
+    };
+    if let Some(why) = why {
+        app.error(why);
+        app.popup = Some(Popup::Send(d, scroll));
+        return;
+    }
+    let back = d.clone();
+    let f = Form::new("Encrypt with PGP", "encrypt")
+        .note("The body is encrypted with gpg to these keys (ids, fingerprints or emails). Add your own key to read it later. The realm, the author and the reply chain stay public, and the ciphertext stays on-chain for good.")
+        .field(Field::text("Recipients", &app.cfg.pgp_recipients.join(", ")))
+        .on_cancel(move |app| app.popup = Some(Popup::Send(back.clone(), scroll)))
+        .on_submit(move |app, v| {
+            let to = crate::pgp::recipients(&v[0]);
+            if to.is_empty() {
+                return Err("enter at least one recipient".into());
+            }
+            let gpg = app.cfg.gpg.clone();
+            let mut d = d.clone();
+            let body = d.body.clone();
+            // no send prompt while gpg runs: y must not post the plain text
+            app.info("encrypting…");
+            app.bg(
+                move |_| async move {
+                    let t = to.clone();
+                    let r = tokio::task::spawn_blocking(move || crate::pgp::encrypt(&gpg, &body, &t))
+                        .await
+                        .unwrap_or_else(|e| Err(crate::pgp::Error::Other(e.to_string())));
+                    Ok((r, to))
+                },
+                move |app, (r, to)| {
+                    let mut scroll = scroll;
+                    match r {
+                        Ok(armor) => {
+                            d.body = armor;
+                            app.info(format!("encrypted to {}; y: post", to.join(", ")));
+                            d.encrypted = Some(to);
+                            scroll = 0;
+                        }
+                        Err(e) => app.error(format!("encrypt: {e}")),
+                    }
+                    app.popup = Some(Popup::Send(d, scroll));
+                },
+            );
+            Ok(())
+        });
+    app.popup = Some(Popup::Form(f));
 }
 
 /// Estimated credits: post cost per started KiB (minimum one), plus polls.

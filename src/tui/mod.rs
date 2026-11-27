@@ -137,6 +137,10 @@ pub struct App {
     pub images: images::Images,
     /// Posts whose pictures are shown.
     pub expanded: std::collections::HashSet<PostId>,
+    /// Decrypted PGP messages by post, in memory only.
+    pub decrypted: std::collections::HashMap<PostId, crate::pgp::Decrypted>,
+    /// A PGP message to decrypt with the terminal handed to pinentry, next loop turn.
+    pub gpg_job: Option<(PostId, String)>,
     last_user_load: Instant,
     /// The signed-in user was loaded at least once.
     user_loaded: bool,
@@ -180,6 +184,8 @@ impl App {
             selected_text: String::new(),
             images,
             expanded: Default::default(),
+            decrypted: Default::default(),
+            gpg_job: None,
             last_user_load: Instant::now(),
             user_loaded: false,
             edit: None,
@@ -951,21 +957,29 @@ fn copy_to_clipboard(s: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_editor(terminal: &mut ratatui::DefaultTerminal, path: &std::path::Path) -> Result<()> {
+/// Run `f` with the terminal handed back to the shell (an editor, pinentry).
+fn suspended<T>(terminal: &mut ratatui::DefaultTerminal, f: impl FnOnce() -> T) -> Result<T> {
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".into());
-    let status = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(format!("{editor} \"$1\""))
-        .arg("sh")
-        .arg(path)
-        .status();
+    let v = f();
     *terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
     terminal.clear()?;
+    Ok(v)
+}
+
+fn run_editor(terminal: &mut ratatui::DefaultTerminal, path: &std::path::Path) -> Result<()> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".into());
+    let status = suspended(terminal, || {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{editor} \"$1\""))
+            .arg("sh")
+            .arg(path)
+            .status()
+    })?;
     let st = status?;
     if !st.success() {
         anyhow::bail!("editor exited with {st}");
@@ -1008,6 +1022,14 @@ pub fn run(cfg: Config) -> Result<()> {
                     Event::Mouse(m) => app.on_mouse(m),
                     _ => {}
                 }
+            }
+            if let Some((id, armor)) = app.gpg_job.take() {
+                let gpg = app.cfg.gpg.clone();
+                let r = suspended(&mut terminal, || {
+                    eprintln!("taggr-tui: decrypting post #{id} with {gpg}…");
+                    crate::pgp::decrypt(&gpg, &armor, true)
+                })?;
+                app.decrypted_done(id, r);
             }
             if let Some(mut le) = app.long_edit.take() {
                 match run_editor(&mut terminal, &le.file) {

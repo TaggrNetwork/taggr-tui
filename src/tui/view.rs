@@ -604,6 +604,14 @@ fn post_actions(o: &mut Out, it: &Item) {
             act(move |app| app.toggle_pictures(id)),
         ));
     }
+    if crate::pgp::find_block(&it.post.body).is_some() {
+        let what = if app.decrypted.contains_key(&id) {
+            "hide plain text (x)"
+        } else {
+            "decrypt (x)"
+        };
+        a.push((what.into(), act(move |app| app.decrypt_post(id))));
+    }
     a.push(("links (o)".into(), act(move |app| app.links_menu(id))));
     a.push((
         "info & versions (i)".into(),
@@ -649,7 +657,7 @@ fn thread(o: &mut Out, p: &Page) {
         let d = p.data.depth.get(&it.post.id).copied().unwrap_or(1).min(8);
         // a guide line between comments keeps the tree readable
         o.text(Line::styled("│ ".repeat(d.saturating_sub(1)), dim()));
-        let e = post_entry(app, p, it, o.w, true, d.saturating_sub(1));
+        let e = comment_card(app, p, it, o.w, d.saturating_sub(1));
         o.entry(e);
     }
 }
@@ -844,7 +852,7 @@ fn inbox(o: &mut Out, p: &Page) {
             if let Some(pid) = post
                 && let Some(it) = p.items.iter().find(|i| i.post.id == pid)
             {
-                let e = post_entry(app, p, it, o.w.saturating_sub(4), false, 0);
+                let e = post_entry(app, p, it, o.w.saturating_sub(4), false);
                 let inner: Vec<Ln> = e.lines.into_iter().take(6).collect();
                 lines.extend(indent(inner, &[Span::raw("  "), Span::styled("▏ ", dim())]));
             }

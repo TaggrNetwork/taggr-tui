@@ -252,6 +252,7 @@ impl App {
                 'm' => return self.realm_cleanup(id),
                 'i' => return self.post_info(id),
                 'I' => return self.toggle_pictures(id),
+                'x' => return self.decrypt_post(id),
                 'o' => return self.links_menu(id),
                 'O' => {
                     let u = self.web_url(&format!("post/{id}"));
@@ -359,6 +360,59 @@ impl App {
         if !self.expanded.remove(&id) {
             self.expanded.insert(id);
         }
+        for p in &mut self.pages {
+            p.dirty();
+        }
+    }
+
+    /// Decrypt the PGP message in a post, or hide its plain text again.
+    pub fn decrypt_post(&mut self, id: PostId) {
+        if self.decrypted.remove(&id).is_some() {
+            return self.redraw_pages();
+        }
+        let body = self
+            .pages
+            .last()
+            .and_then(|p| p.post(id))
+            .map(|it| it.post.body.clone())
+            .unwrap_or_default();
+        let Some(range) = crate::pgp::find_block(&body) else {
+            return self.error("no PGP message in this post");
+        };
+        let armor = crate::pgp::armor(&body, range);
+        let gpg = self.cfg.gpg.clone();
+        self.info("decrypting…");
+        self.bg(
+            move |_| async move {
+                let a = armor.clone();
+                let r = tokio::task::spawn_blocking(move || crate::pgp::decrypt(&gpg, &a, false))
+                    .await?;
+                Ok((r, armor))
+            },
+            move |app, (r, armor)| match r {
+                // the agent wants a passphrase: hand the terminal to pinentry
+                Err(crate::pgp::Error::NeedPassphrase) => app.gpg_job = Some((id, armor)),
+                r => app.decrypted_done(id, r),
+            },
+        );
+    }
+
+    pub fn decrypted_done(
+        &mut self,
+        id: PostId,
+        r: Result<crate::pgp::Decrypted, crate::pgp::Error>,
+    ) {
+        match r {
+            Ok(d) => {
+                self.info(d.signature.clone().unwrap_or_else(|| "decrypted".into()));
+                self.decrypted.insert(id, d);
+                self.redraw_pages();
+            }
+            Err(e) => self.error(format!("decrypt: {e}")),
+        }
+    }
+
+    fn redraw_pages(&mut self) {
         for p in &mut self.pages {
             p.dirty();
         }

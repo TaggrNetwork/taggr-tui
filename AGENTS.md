@@ -66,6 +66,7 @@ On this machine `tmux` may be a shell alias; call `/usr/bin/tmux`. For a local r
 | `src/identity.rs` | seed phrase → Ed25519 key (sha256 × 15000), key file (0600) |
 | `src/ic.rs` | `ic-agent` wrapper: Taggr's raw JSON methods, Candid calls, management canister |
 | `src/api.rs` | typed models and one method per canister/ledger call |
+| `src/pgp.rs` | PGP via the user's `gpg`: armored blocks in posts, decrypt, encrypt |
 | `src/storage.rs` | the user's media bucket: create via CMC, top up, upgrade, status, controllers |
 | `src/markdown.rs` | Markdown → styled lines; `@user #tag $TOKEN /REALM`, `/blob/` pictures, cut |
 | `src/tui/mod.rs` | `App`: background calls, sidebar, page stack, popups, sign-in, event loop |

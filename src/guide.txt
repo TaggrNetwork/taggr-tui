@@ -31,6 +31,8 @@ CONFIGURATION
     expand_images = false                     # show pictures expanded (else I per post)
     image_protocol = "auto"                   # kitty | sixel | iterm2 | halfblocks
     download_dir = "~/Downloads"
+    gpg = "gpg"                               # gpg binary for PGP messages
+    pgp_recipients = []                       # prefilled recipients for x (encrypt)
 
 LAYOUT
   Sidebar: feeds, realms, your pages, Taggr pages. Right: the open page.
@@ -65,6 +67,7 @@ KEYS
   e  D                   edit · delete (your posts; delete shows the cost)
   i                      info: reactions by user, tips, versions
   I                      show / hide the post's pictures (collapsed by default)
+  x                      decrypt the post's PGP message / hide it again
   o  O                   links in the post · open the post in the browser
   m                      move out of its realm (realm controllers)
   A Z X                  proposal: accept · reject · cancel (yours)
@@ -99,9 +102,23 @@ WRITING POSTS
   Pictures: ![alt](~/path/to/picture.png) uploads the file to your storage
   canister (Settings → Storage) when posting, shrunk to the size limit.
 
-  After the editor closes: y post · e edit again · Esc keep the draft for later ·
-  D discard. Unchanged drafts are discarded. Drafts live in
+  After the editor closes: y post · e edit again · x encrypt · Esc keep the
+  draft for later · D discard. Unchanged drafts are discarded. Drafts live in
   ~/.cache/taggr-tui/drafts until posted.
+
+PGP
+  Posts with a -----BEGIN PGP MESSAGE----- block show it as one line; x
+  decrypts it with your gpg (keyring, gpg-agent, pinentry) and shows the plain
+  text and any signature in place. It is kept in memory only. When the agent
+  needs a passphrase, the screen is handed to pinentry (a terminal pinentry
+  needs GPG_TTY set, e.g. export GPG_TTY=$(tty)).
+
+  x in the send prompt encrypts the body to the recipients you enter
+  (pgp_recipients prefills them); add your own key to read it later. Recipient
+  keys must be valid in gpg (signed or trusted). Only the body is encrypted:
+  realm, author, time and reply chain stay public, and the ciphertext stays
+  on-chain for good. Polls and drafts with local pictures can't be encrypted;
+  e edits the plain text again.
 
 PAGES
   Feeds (Home, New, Hot, Bookmarks, tag feeds), realms, profiles and

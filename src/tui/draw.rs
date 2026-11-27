@@ -258,25 +258,20 @@ fn draw_page(f: &mut Frame, app: &mut App, area: Rect) {
         if page.tab_row.as_ref().is_some_and(|t| t.0 == i) && y >= page.off {
             app.hits.tabs = Some((inner.y + top as u16, inner.x + 2));
         }
-        // a selected post card shows by its heavy frame instead of the bar
+        // a selected post card shows by its frame colour instead of the bar
         let fs = super::page::frame_style();
-        let card = e.lines.first().is_some_and(
-            |l| matches!(l, Ln::Text(t) if t.spans.first().is_some_and(|s| s.style == fs)),
-        );
-        let heavy = sel && card;
+        let card = e.lines.first().is_some_and(|l| {
+            matches!(l, Ln::Text(t) if t.spans.iter().any(|s| s.style == fs && s.content.starts_with('╭')))
+        });
+        let lit = sel && card;
         let frame_span = |s: &Span<'static>| -> Span<'static> {
-            if !heavy || s.style != fs {
+            if !lit || s.style != fs {
                 return Span::styled(plain_width(&s.content), s.style);
             }
-            let c: String = s.content.chars().map(heavy_frame).collect();
-            let st = if focused {
-                Style::default().fg(ACCENT)
-            } else {
-                fs
-            };
-            Span::styled(c, st.add_modifier(Modifier::BOLD))
+            let fg = if focused { ACCENT } else { Color::White };
+            Span::styled(s.content.clone(), Style::default().fg(fg))
         };
-        let bar = if heavy {
+        let bar = if lit {
             Span::raw("  ")
         } else if sel && focused {
             Span::styled("▌ ", Style::default().fg(ACCENT))
@@ -435,6 +430,14 @@ fn hints(app: &App) -> Vec<(String, String)> {
             }
             if it.is_some_and(|i| !i.post.files.is_empty()) {
                 v.push(k("I", "pictures"));
+            }
+            if it.is_some_and(|i| crate::pgp::find_block(&i.post.body).is_some()) {
+                let what = if app.decrypted.contains_key(id) {
+                    "hide plain text"
+                } else {
+                    "decrypt"
+                };
+                v.push(k("x", what));
             }
             v.extend([k("o", "links"), k("i", "info")]);
             if !signed {
@@ -675,6 +678,9 @@ fn draw_popup(f: &mut Frame, app: &mut App, area: Rect) {
             if imgs > 0 {
                 info.push(format!("{imgs} pictures to upload"));
             }
+            if let Some(to) = &d.encrypted {
+                info.push(format!("encrypted to {}", to.join(", ")));
+            }
             lines.push(Line::styled(info.join(" · "), dim()));
             lines.push(Line::raw(""));
             if let Some(p) = &d.poll {
@@ -687,7 +693,14 @@ fn draw_popup(f: &mut Frame, app: &mut App, area: Rect) {
                 ));
                 lines.push(Line::raw(""));
             }
-            let r = crate::markdown::render(&d.body, iw);
+            let r = if d.encrypted.is_some() {
+                // ciphertext as it will be posted, not as Markdown
+                let raw = d.body.lines().map(|l| Line::styled(l.to_string(), dim()));
+                lines.extend(raw);
+                Default::default()
+            } else {
+                crate::markdown::render(&d.body, iw)
+            };
             for b in r.blocks {
                 lines.push(match b {
                     crate::markdown::Block::Line(l) => l,
@@ -712,6 +725,8 @@ fn draw_popup(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(" post  ", dim()),
                 Span::styled("e", key_style()),
                 Span::styled(" edit  ", dim()),
+                Span::styled("x", key_style()),
+                Span::styled(" encrypt  ", dim()),
                 Span::styled("Esc", key_style()),
                 Span::styled(" keep for later  ", dim()),
                 Span::styled("D", key_style()),
@@ -764,6 +779,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         ("b w H p", "post: bookmark · watch · hide · pin to profile"),
         ("t  P  v", "post: tip · repost · vote in poll"),
         ("e  D", "post: edit · delete (your posts)"),
+        ("x", "post: decrypt PGP message · send prompt: encrypt"),
         (
             "i  o  O",
             "post: info and versions · links · open on the web",
@@ -811,17 +827,4 @@ fn draw_help(f: &mut Frame, area: Rect) {
     let r = centered(area, 92, lines.len() as u16 + 2);
     f.render_widget(Clear, r);
     f.render_widget(Paragraph::new(lines).block(popup_block("Keys")), r);
-}
-
-/// The heavy counterpart of a rounded frame character.
-fn heavy_frame(c: char) -> char {
-    match c {
-        '╭' => '┏',
-        '╮' => '┓',
-        '╰' => '┗',
-        '╯' => '┛',
-        '─' => '━',
-        '│' => '┃',
-        c => c,
-    }
 }

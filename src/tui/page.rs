@@ -1051,10 +1051,18 @@ fn post_lines(app: &App, page: &Page, it: &Item, w: usize, full: bool, nested: b
         } else {
             p.body.split(markdown::CUT).next().unwrap_or("").to_string()
         };
-        let r = markdown::render(&body, w);
         let urls = p.images(app.api.local.as_deref());
         let expand = app.expanded.contains(&p.id) || app.cfg.expand_images;
-        let mut body = blocks_with(app, r.blocks, w, &urls, expand);
+        let md = |s: &str| blocks_with(app, markdown::render(s, w).blocks, w, &urls, expand);
+        let mut body = match crate::pgp::find_block(&body) {
+            Some((a, b)) => {
+                let mut l = md(&body[..a]);
+                l.extend(pgp_lines(app, p.id, w));
+                l.extend(md(&body[b..]));
+                l
+            }
+            None => md(&body),
+        };
         let cut = !full && (body.len() > PREVIEW || p.body.contains(markdown::CUT));
         if !full && body.len() > PREVIEW {
             body.truncate(PREVIEW);
@@ -1107,7 +1115,29 @@ fn post_lines(app: &App, page: &Page, it: &Item, w: usize, full: bool, nested: b
     lines
 }
 
-/// A post as an entry; comments (`depth` > 0) hang off tree guides.
+/// A post's PGP message: one locked line, or its decrypted text in a box.
+fn pgp_lines(app: &App, id: PostId, w: usize) -> Vec<Ln> {
+    let Some(d) = app.decrypted.get(&id) else {
+        return vec![Ln::Text(Line::from(vec![
+            Span::styled(
+                format!("{} PGP message", ic(app, "\u{f023}", "▣")),
+                Style::default().fg(ACCENT),
+            ),
+            Span::styled("  x: decrypt", dim()),
+        ]))];
+    };
+    let mut title = format!("{} decrypted", ic(app, "\u{f09c}", "▢"));
+    if let Some(s) = &d.signature {
+        title += &format!(" · {s}");
+    }
+    let inner = blocks(
+        app,
+        markdown::render(&d.text, w.saturating_sub(4)).blocks,
+        w,
+    );
+    boxed(&title, inner, w, Style::default().fg(ACCENT))
+}
+
 /// A post as a framed card (feeds, the open post).
 pub fn post_card(app: &App, page: &Page, it: &Item, w: usize, full: bool) -> Entry {
     let lines = post_lines(app, page, it, w.saturating_sub(4).max(20), full, false);
@@ -1118,22 +1148,24 @@ pub fn post_card(app: &App, page: &Page, it: &Item, w: usize, full: bool) -> Ent
     }
 }
 
-pub fn post_entry(app: &App, page: &Page, it: &Item, w: usize, full: bool, depth: usize) -> Entry {
-    let guide = 2 * depth;
-    let lines = post_lines(app, page, it, w.saturating_sub(guide).max(20), full, false);
-    let lines = if depth > 0 {
+/// A comment as a framed card hanging off `depth` tree guides.
+pub fn comment_card(app: &App, page: &Page, it: &Item, w: usize, depth: usize) -> Entry {
+    let mut e = post_card(app, page, it, w.saturating_sub(2 * depth).max(24), true);
+    if depth > 0 {
         let prefix: Vec<Span<'static>> = (0..depth).map(|_| Span::styled("│ ", dim())).collect();
-        let mut lines = indent(lines, &prefix);
-        // the head branches off the parent's guide towards the author's name
-        if let Some(Ln::Text(head)) = lines.first_mut() {
-            head.spans[depth - 1] = Span::styled("├─", dim());
+        e.lines = indent(e.lines, &prefix);
+        // the frame branches off the parent's guide
+        if let Some(Ln::Text(top)) = e.lines.first_mut() {
+            top.spans[depth - 1] = Span::styled("├─", dim());
         }
-        lines
-    } else {
-        lines
-    };
+    }
+    e
+}
+
+/// A post without a frame (inbox previews).
+pub fn post_entry(app: &App, page: &Page, it: &Item, w: usize, full: bool) -> Entry {
     Entry {
-        lines,
+        lines: post_lines(app, page, it, w, full, false),
         target: Some(Target::Post(it.post.id)),
         key: format!("p:{}", it.post.id),
     }

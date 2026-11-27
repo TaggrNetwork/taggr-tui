@@ -92,6 +92,7 @@ impl Field {
 }
 
 type Submit = Rc<dyn Fn(&mut App, &[String]) -> Result<(), String>>;
+type Cancel = Rc<dyn Fn(&mut App)>;
 
 pub struct Form {
     pub title: String,
@@ -101,6 +102,7 @@ pub struct Form {
     pub sel: usize,
     pub error: Option<String>,
     on_submit: Option<Submit>,
+    on_cancel: Option<Cancel>,
 }
 
 impl Form {
@@ -113,6 +115,7 @@ impl Form {
             sel: 0,
             error: None,
             on_submit: None,
+            on_cancel: None,
         }
     }
     pub fn note(mut self, s: &str) -> Form {
@@ -128,6 +131,11 @@ impl Form {
         f: impl Fn(&mut App, &[String]) -> Result<(), String> + 'static,
     ) -> Form {
         self.on_submit = Some(Rc::new(f));
+        self
+    }
+    /// Called when the form is closed with Esc.
+    pub fn on_cancel(mut self, f: impl Fn(&mut App) + 'static) -> Form {
+        self.on_cancel = Some(Rc::new(f));
         self
     }
 }
@@ -153,15 +161,17 @@ fn submit(app: &mut App, mut f: Form) {
 pub fn key(app: &mut App, mut f: Form, k: KeyEvent) {
     let n = f.fields.len();
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-    let Some(field) = f.fields.get_mut(f.sel) else {
-        if k.code != KeyCode::Esc {
-            submit(app, f);
+    if k.code == KeyCode::Esc {
+        if let Some(cb) = f.on_cancel.clone() {
+            cb(app);
         }
         return;
+    }
+    let Some(field) = f.fields.get_mut(f.sel) else {
+        return submit(app, f);
     };
     f.error = None;
     match (k.code, &field.kind) {
-        (KeyCode::Esc, _) => return,
         (KeyCode::Char('s'), _) if ctrl => return submit(app, f),
         (KeyCode::Tab | KeyCode::Down, _) => f.sel = (f.sel + 1) % n,
         (KeyCode::BackTab | KeyCode::Up, _) => f.sel = (f.sel + n - 1) % n,
