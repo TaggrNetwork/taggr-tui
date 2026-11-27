@@ -6,6 +6,7 @@ use super::page::{ACCENT, Kind, Ln, accent, dim, head, key_style};
 use super::{App, Focus, Nav, Popup};
 use crate::config::IconSet;
 use ratatui::Frame;
+use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -116,9 +117,42 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_page(f, app, r);
     }
     draw_status(f, app, bottom);
+    paint_selection(f.buffer_mut(), app);
     if app.popup.is_some() {
         draw_popup(f, app, area);
     }
+}
+
+/// Highlight the mouse selection and keep its text in `App::selected_text`: the cells
+/// from `from` to `to` in reading order, inside the page pane only, rows without
+/// trailing blanks.
+fn paint_selection(buf: &mut Buffer, app: &mut App) {
+    let Some(s) = app.selection.as_ref().filter(|s| s.dragged) else {
+        return;
+    };
+    let (a, b) = if (s.from.y, s.from.x) <= (s.to.y, s.to.x) {
+        (s.from, s.to)
+    } else {
+        (s.to, s.from)
+    };
+    let mut text = String::new();
+    for y in a.y..=b.y {
+        let x0 = if y == a.y { a.x } else { s.area.x };
+        let x1 = if y == b.y { b.x } else { s.area.right() - 1 };
+        let mut row = String::new();
+        let mut x = x0;
+        while x <= x1 && buf.area.contains(Position::new(x, y)) {
+            let cell = &mut buf[(x, y)];
+            row.push_str(cell.symbol());
+            cell.modifier.insert(Modifier::REVERSED);
+            x += cell.cell_width().max(1);
+        }
+        if y > a.y {
+            text.push('\n');
+        }
+        text.push_str(row.trim_end());
+    }
+    app.selected_text = text;
 }
 
 fn draw_nav(f: &mut Frame, app: &mut App, area: Rect) {
@@ -747,7 +781,10 @@ fn draw_help(f: &mut Frame, area: Rect) {
         ("d D w", "inbox: dismiss · clear all · unwatch"),
         ("n", "proposals: new · realms: create"),
         ("q  Ctrl-C", "quit"),
-        ("mouse", "click selects · click again opens · wheel scrolls"),
+        (
+            "mouse",
+            "click selects · click again opens · wheel scrolls · drag copies",
+        ),
         ("", ""),
         (
             "",

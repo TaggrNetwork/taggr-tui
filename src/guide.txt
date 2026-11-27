@@ -52,6 +52,10 @@ KEYS
   c  C                   new post / new poll (in the realm shown)
   ?                      keys
   q  Ctrl-C              quit
+  mouse                  click selects, click again opens, wheel scrolls; drag
+                         selects text in the page and copies it to the clipboard
+                         on release (OSC 52; in tmux needs `set -g set-clipboard
+                         on`); Shift+drag is the terminal's own selection
 
   On a post:
   r                      reply

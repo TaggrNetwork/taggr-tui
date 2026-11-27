@@ -96,6 +96,17 @@ pub struct Hits {
     pub tabs: Option<(u16, u16)>,
 }
 
+/// Text being selected with the mouse in the page pane: `area` is the pane's inner area,
+/// `from` where the button went down, `to` where it is now (kept inside `area`).
+pub struct Selection {
+    pub area: Rect,
+    pub from: Position,
+    pub to: Position,
+    pub dragged: bool,
+    /// The press was on the selected entry: open it on release unless dragged.
+    pub reopen: bool,
+}
+
 pub struct App {
     pub cfg: Config,
     pub api: Arc<Api>,
@@ -119,6 +130,10 @@ pub struct App {
     pub popup: Option<Popup>,
     pub status: Option<(String, bool, Instant)>,
     pub hits: Hits,
+    /// Mouse selection; any key, click or scroll ends it.
+    pub selection: Option<Selection>,
+    /// Text of the selection as last drawn; copied when the button is released.
+    pub selected_text: String,
     pub images: images::Images,
     /// Posts whose pictures are shown.
     pub expanded: std::collections::HashSet<PostId>,
@@ -161,6 +176,8 @@ impl App {
             popup: None,
             status: None,
             hits: Hits::default(),
+            selection: None,
+            selected_text: String::new(),
             images,
             expanded: Default::default(),
             last_user_load: Instant::now(),
@@ -180,6 +197,18 @@ impl App {
 
     pub fn error(&mut self, s: impl std::fmt::Display) {
         self.status = Some((s.to_string(), true, Instant::now()));
+    }
+
+    /// Put the mouse selection's text on the clipboard.
+    fn copy_selection(&mut self) {
+        let text = std::mem::take(&mut self.selected_text);
+        if text.trim().is_empty() {
+            return;
+        }
+        match copy_to_clipboard(&text) {
+            Ok(()) => self.info(format!("copied {} characters", text.chars().count())),
+            Err(e) => self.error(format!("copy: {e}")),
+        }
     }
 
     /// Requires a registered user; says why not otherwise.
@@ -668,6 +697,7 @@ impl App {
             self.quit = true;
             return;
         }
+        self.selection = None;
         if let Some(p) = self.popup.take() {
             self.popup_key(p, k);
             return;
@@ -718,6 +748,7 @@ impl App {
         let pos = Position::new(m.column, m.row);
         match m.kind {
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                self.selection = None;
                 let d: isize = if m.kind == MouseEventKind::ScrollDown {
                     3
                 } else {
@@ -730,6 +761,7 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                self.selection = None;
                 if self.popup.is_some() {
                     return;
                 }
@@ -768,17 +800,41 @@ impl App {
                         .iter()
                         .find(|(_, top, h)| m.row >= *top && m.row < top + h)
                         .map(|e| e.0);
-                    if let Some(i) = hit {
-                        let open = self.page().map(|p| p.sel == i).unwrap_or(false);
-                        if let Some(p) = self.page() {
-                            p.select(i);
-                        }
-                        if open {
-                            self.enter();
-                        }
+                    let mut reopen = false;
+                    if let Some(i) = hit
+                        && let Some(p) = self.page()
+                    {
+                        reopen = p.sel == i;
+                        p.select(i);
                     }
+                    self.selection = Some(Selection {
+                        area: self.hits.page,
+                        from: pos,
+                        to: pos,
+                        dragged: false,
+                        reopen,
+                    });
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(s) = &mut self.selection {
+                    let a = s.area;
+                    s.to = Position::new(
+                        m.column.clamp(a.left(), a.right() - 1),
+                        m.row.clamp(a.top(), a.bottom() - 1),
+                    );
+                    s.dragged |= s.to != s.from;
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => match self.selection.take() {
+                Some(s) if s.dragged => {
+                    // stays highlighted until the next key, click or scroll
+                    self.selection = Some(s);
+                    self.copy_selection();
+                }
+                Some(s) if s.reopen => self.enter(),
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -883,6 +939,16 @@ fn short_error(e: &str) -> String {
         _ => e,
     };
     e.replace('\n', " ")
+}
+
+/// Put `s` on the system clipboard with an OSC 52 escape sequence written to the
+/// terminal (inside tmux this needs `set -g set-clipboard on`).
+fn copy_to_clipboard(s: &str) -> Result<()> {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    write!(out, "\x1b]52;c;{}\x07", compose::base64(s.as_bytes()))?;
+    out.flush()?;
+    Ok(())
 }
 
 fn run_editor(terminal: &mut ratatui::DefaultTerminal, path: &std::path::Path) -> Result<()> {
