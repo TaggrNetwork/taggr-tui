@@ -124,8 +124,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 /// Highlight the mouse selection and keep its text in `App::selected_text`: the cells
-/// from `from` to `to` in reading order, inside the page pane only, rows without
-/// trailing blanks.
+/// from `from` to `to` in reading order, inside the page pane only. Frames and comment
+/// guides at either end of a row are left out, and rows of only frame are skipped.
 fn paint_selection(buf: &mut Buffer, app: &mut App) {
     let Some(s) = app.selection.as_ref().filter(|s| s.dragged) else {
         return;
@@ -135,24 +135,53 @@ fn paint_selection(buf: &mut Buffer, app: &mut App) {
     } else {
         (s.to, s.from)
     };
-    let mut text = String::new();
+    let mut rows: Vec<String> = Vec::new();
     for y in a.y..=b.y {
         let x0 = if y == a.y { a.x } else { s.area.x };
         let x1 = if y == b.y { b.x } else { s.area.right() - 1 };
-        let mut row = String::new();
+        let mut cells = Vec::new();
         let mut x = x0;
         while x <= x1 && buf.area.contains(Position::new(x, y)) {
-            let cell = &mut buf[(x, y)];
-            row.push_str(cell.symbol());
-            cell.modifier.insert(Modifier::REVERSED);
+            let cell = &buf[(x, y)];
+            cells.push((x, cell.symbol().to_string()));
             x += cell.cell_width().max(1);
         }
-        if y > a.y {
-            text.push('\n');
+        let content = |c: &(u16, String)| !is_decoration(&c.1);
+        let (Some(first), Some(last)) = (
+            cells.iter().position(content),
+            cells.iter().rposition(content),
+        ) else {
+            // an empty line inside a frame or between comments separates paragraphs;
+            // top and bottom borders are dropped
+            let inside = !cells.is_empty()
+                && cells
+                    .iter()
+                    .all(|c| c.1.chars().all(|ch| ch.is_whitespace() || ch == '│'));
+            if inside {
+                rows.push(String::new());
+            }
+            continue;
+        };
+        let mut row = String::new();
+        for (x, sym) in &cells[first..=last] {
+            row.push_str(sym);
+            buf[(*x, y)].modifier.insert(Modifier::REVERSED);
         }
-        text.push_str(row.trim_end());
+        rows.push(row);
     }
-    app.selected_text = text;
+    // no blank lines at either end
+    let first = rows.iter().position(|r| !r.is_empty());
+    let end = rows
+        .iter()
+        .rposition(|r| !r.is_empty())
+        .map_or(0, |i| i + 1);
+    app.selected_text = first.map(|i| rows[i..end].join("\n")).unwrap_or_default();
+}
+
+/// A cell that only draws: blank, a frame or guide line, or a half-block picture.
+fn is_decoration(sym: &str) -> bool {
+    sym.chars()
+        .all(|c| c.is_whitespace() || ('\u{2500}'..='\u{259F}').contains(&c))
 }
 
 fn draw_nav(f: &mut Frame, app: &mut App, area: Rect) {
