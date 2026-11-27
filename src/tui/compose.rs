@@ -30,6 +30,8 @@ pub struct Draft {
     pub poll: Option<Poll>,
     /// Recipients the body was encrypted to; editing again starts from the plain text.
     pub encrypted: Option<Vec<String>>,
+    /// The template quotes a decrypted message: posting it unencrypted asks first.
+    pub plain_quote: bool,
 }
 
 pub fn scratch_file(name: &str) -> PathBuf {
@@ -54,6 +56,7 @@ impl Draft {
             body: String::new(),
             poll: None,
             encrypted: None,
+            plain_quote: false,
         }
     }
 
@@ -71,12 +74,15 @@ impl Draft {
     }
 
     /// A reply quoting the parent's body with `> `, as in email, then the mention.
-    pub fn reply(parent: PostId, author: &str, body: &str) -> Draft {
-        let mut t = quote(body);
+    /// `plain` is the decrypted text of the parent's encrypted block, if it was decrypted.
+    pub fn reply(parent: PostId, author: &str, body: &str, plain: Option<&str>) -> Draft {
+        let (mut t, plain_quote) = quote(body, plain);
         if !author.is_empty() {
             t.push_str(&format!("@{author} "));
         }
-        Draft::make(What::Reply(parent), None, t)
+        let mut d = Draft::make(What::Reply(parent), None, t);
+        d.plain_quote = plain_quote;
+        d
     }
 
     pub fn edit(p: &api::Post) -> Draft {
@@ -174,16 +180,18 @@ impl Draft {
 
 /// After the editor closed: unchanged → discarded, else the send prompt.
 /// `body` as a Markdown quote followed by an empty line, or nothing for an empty body.
-/// An encrypted block is never quoted: its plain text must not leak into a public reply,
-/// and its ciphertext is of no use.
-fn quote(body: &str) -> String {
+/// An encrypted block is quoted as its decrypted text `plain`, or left out without it
+/// (its ciphertext is of no use). The flag says whether decrypted text was quoted.
+fn quote(body: &str, plain: Option<&str>) -> (String, bool) {
     let mut body = body.to_string();
+    let mut quoted_plain = false;
     if let Some((a, b)) = crate::pgp::find_block(&body) {
-        body.replace_range(a..b, "[PGP message]");
+        body.replace_range(a..b, plain.unwrap_or(""));
+        quoted_plain = plain.is_some_and(|p| !p.trim().is_empty());
     }
     let body = body.trim();
     if body.is_empty() {
-        return String::new();
+        return (String::new(), false);
     }
     let mut q: String = body
         .lines()
@@ -196,7 +204,7 @@ fn quote(body: &str) -> String {
         })
         .collect();
     q.push('\n');
-    q
+    (q, quoted_plain)
 }
 
 pub fn edited(app: &mut App, mut d: Draft) {
@@ -217,6 +225,12 @@ pub fn edited(app: &mut App, mut d: Draft) {
 
 pub fn send_key(app: &mut App, d: Draft, scroll: u16, k: KeyEvent) {
     match k.code {
+        KeyCode::Char('y') if d.plain_quote && d.encrypted.is_none() => {
+            let mut d = d;
+            d.plain_quote = false;
+            app.error("this reply quotes decrypted text in the clear; y: post anyway, x: encrypt");
+            app.popup = Some(Popup::Send(d, scroll));
+        }
         KeyCode::Char('y') => post(app, d),
         KeyCode::Char('x') => encrypt_form(app, d, scroll),
         KeyCode::Char('e') => app.edit = Some(d),
@@ -550,7 +564,7 @@ mod tests {
 
     #[test]
     fn replies_have_no_headers() {
-        let mut d = Draft::reply(1, "x", "");
+        let mut d = Draft::reply(1, "x", "", None);
         d.parse("Realm: no header here").unwrap();
         assert_eq!(d.body, "Realm: no header here");
         d.discard();
@@ -558,12 +572,18 @@ mod tests {
 
     #[test]
     fn replies_quote_the_parent() {
-        let d = Draft::reply(1, "bob", "hi\n\n> earlier\n");
+        let d = Draft::reply(1, "bob", "hi\n\n> earlier\n", None);
         assert_eq!(d.template, "> hi\n>\n> > earlier\n\n@bob ");
+        assert!(!d.plain_quote);
         d.discard();
         let pgp = "a\n-----BEGIN PGP MESSAGE-----\nx\n-----END PGP MESSAGE-----\nb";
-        assert_eq!(quote(pgp), "> a\n> [PGP message]\n> b\n\n");
-        assert_eq!(quote("  "), "");
+        let q = |p| quote(pgp, p);
+        assert_eq!(
+            q(Some("secret\ntext")),
+            ("> a\n> secret\n> text\n> b\n\n".into(), true)
+        );
+        assert_eq!(q(None), ("> a\n>\n> b\n\n".into(), false));
+        assert_eq!(quote("  ", None), (String::new(), false));
     }
 
     #[test]

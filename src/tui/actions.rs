@@ -426,7 +426,8 @@ impl App {
             .item(id)
             .map(|i| (i.meta.author_name, i.post.body))
             .unwrap_or_default();
-        self.edit = Some(compose::Draft::reply(id, &author, &body));
+        let plain = self.decrypted.get(&id).map(|d| d.text.as_str());
+        self.edit = Some(compose::Draft::reply(id, &author, &body, plain));
     }
 
     pub fn new_post(&mut self, realm: Option<String>) {

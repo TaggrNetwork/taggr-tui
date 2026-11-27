@@ -740,6 +740,8 @@ fn draw_popup(f: &mut Frame, app: &mut App, area: Rect) {
             }
             if let Some(to) = &d.encrypted {
                 info.push(format!("encrypted to {}", to.join(", ")));
+            } else if d.plain_quote {
+                info.push("quotes decrypted text in the clear".into());
             }
             lines.push(Line::styled(info.join(" · "), dim()));
             lines.push(Line::raw(""));
