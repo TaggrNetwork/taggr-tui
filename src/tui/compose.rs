@@ -70,12 +70,12 @@ impl Draft {
         Draft::make(What::Poll, realm, t)
     }
 
-    pub fn reply(parent: PostId, author: &str) -> Draft {
-        let t = if author.is_empty() {
-            String::new()
-        } else {
-            format!("@{author} ")
-        };
+    /// A reply quoting the parent's body with `> `, as in email, then the mention.
+    pub fn reply(parent: PostId, author: &str, body: &str) -> Draft {
+        let mut t = quote(body);
+        if !author.is_empty() {
+            t.push_str(&format!("@{author} "));
+        }
         Draft::make(What::Reply(parent), None, t)
     }
 
@@ -173,6 +173,32 @@ impl Draft {
 }
 
 /// After the editor closed: unchanged → discarded, else the send prompt.
+/// `body` as a Markdown quote followed by an empty line, or nothing for an empty body.
+/// An encrypted block is never quoted: its plain text must not leak into a public reply,
+/// and its ciphertext is of no use.
+fn quote(body: &str) -> String {
+    let mut body = body.to_string();
+    if let Some((a, b)) = crate::pgp::find_block(&body) {
+        body.replace_range(a..b, "[PGP message]");
+    }
+    let body = body.trim();
+    if body.is_empty() {
+        return String::new();
+    }
+    let mut q: String = body
+        .lines()
+        .map(|l| {
+            if l.is_empty() {
+                ">\n".to_string()
+            } else {
+                format!("> {l}\n")
+            }
+        })
+        .collect();
+    q.push('\n');
+    q
+}
+
 pub fn edited(app: &mut App, mut d: Draft) {
     let text = std::fs::read_to_string(&d.file).unwrap_or_default();
     if text == d.template {
@@ -524,10 +550,20 @@ mod tests {
 
     #[test]
     fn replies_have_no_headers() {
-        let mut d = Draft::reply(1, "x");
+        let mut d = Draft::reply(1, "x", "");
         d.parse("Realm: no header here").unwrap();
         assert_eq!(d.body, "Realm: no header here");
         d.discard();
+    }
+
+    #[test]
+    fn replies_quote_the_parent() {
+        let d = Draft::reply(1, "bob", "hi\n\n> earlier\n");
+        assert_eq!(d.template, "> hi\n>\n> > earlier\n\n@bob ");
+        d.discard();
+        let pgp = "a\n-----BEGIN PGP MESSAGE-----\nx\n-----END PGP MESSAGE-----\nb";
+        assert_eq!(quote(pgp), "> a\n> [PGP message]\n> b\n\n");
+        assert_eq!(quote("  "), "");
     }
 
     #[test]

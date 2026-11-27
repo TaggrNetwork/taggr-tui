@@ -99,7 +99,9 @@ WRITING POSTS
 
     Body in **Markdown**, with @user, #tag, $TOKEN and /REALM links.
 
-  Replies have no headers. Four newlines split a post into teaser and rest.
+  Replies have no headers and start with the post quoted (> lines, an
+  encrypted block as [PGP message]); trim it. Four newlines split a post
+  into teaser and rest.
   Pictures: ![alt](~/path/to/picture.png) uploads the file to your storage
   canister (Settings → Storage) when posting, shrunk to the size limit.
 

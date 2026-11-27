@@ -422,11 +422,11 @@ impl App {
         if !self.need_user() {
             return;
         }
-        let quote = self
+        let (author, body) = self
             .item(id)
-            .map(|i| i.meta.author_name)
+            .map(|i| (i.meta.author_name, i.post.body))
             .unwrap_or_default();
-        self.edit = Some(compose::Draft::reply(id, &quote));
+        self.edit = Some(compose::Draft::reply(id, &author, &body));
     }
 
     pub fn new_post(&mut self, realm: Option<String>) {
