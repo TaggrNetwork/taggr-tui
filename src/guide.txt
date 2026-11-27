@@ -31,6 +31,7 @@ CONFIGURATION
     expand_images = false                     # show pictures expanded (else I per post)
     image_protocol = "auto"                   # kitty | sixel | iterm2 | halfblocks
     download_dir = "~/Downloads"
+    notify = true                             # desktop notifications for new inbox items
     gpg = "gpg"                               # gpg binary for PGP messages
     pgp_recipients = []                       # prefilled recipients for x (encrypt)
 
@@ -105,6 +106,13 @@ WRITING POSTS
   After the editor closes: y post · e edit again · x encrypt · Esc keep the
   draft for later · D discard. Unchanged drafts are discarded. Drafts live in
   ~/.cache/taggr-tui/drafts until posted.
+
+NOTIFICATIONS
+  While the TUI runs and you are signed in, new unread inbox items trigger a
+  desktop notification ("N new notifications" for more than 5 at once). The
+  inbox is checked every minute and after s. Items present at startup are not
+  announced; nothing is shown while taggr-tui is closed. Each notification also
+  rings the terminal bell, so tmux marks the window (monitor-bell).
 
 PGP
   Posts with a -----BEGIN PGP MESSAGE----- block show it as one line; x

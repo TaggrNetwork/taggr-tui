@@ -137,6 +137,9 @@ pub struct App {
     pub images: images::Images,
     /// Posts whose pictures are shown.
     pub expanded: std::collections::HashSet<PostId>,
+    /// Inbox items seen so far (None until the first user load): only newer unread ones
+    /// are announced.
+    known_notes: Option<std::collections::HashSet<u64>>,
     /// Decrypted PGP messages by post, in memory only.
     pub decrypted: std::collections::HashMap<PostId, crate::pgp::Decrypted>,
     /// A PGP message to decrypt with the terminal handed to pinentry, next loop turn.
@@ -184,6 +187,7 @@ impl App {
             selected_text: String::new(),
             images,
             expanded: Default::default(),
+            known_notes: None,
             decrypted: Default::default(),
             gpg_job: None,
             last_user_load: Instant::now(),
@@ -322,6 +326,7 @@ impl App {
                 let unregistered = u.is_none() && !app.user_loaded;
                 app.user_loaded = true;
                 app.user = u;
+                app.check_inbox();
                 app.build_nav();
                 // pages that show membership (e.g. Realms → Mine)
                 if let Some(p) = app.pages.last_mut() {
@@ -633,7 +638,56 @@ impl App {
         });
     }
 
+    /// Announce unread inbox items that appeared since the last user load: a desktop
+    /// notification each (one summary for more than five) and the terminal bell.
+    fn check_inbox(&mut self) {
+        let Some(u) = &self.user else { return };
+        let first = self.known_notes.is_none();
+        let known = self.known_notes.get_or_insert_with(Default::default);
+        let mut fresh: Vec<String> = u
+            .notifications
+            .iter()
+            .filter(|(id, (_, read))| known.insert(**id) && !read)
+            .map(|(_, (n, _))| crate::markdown::first_line(&n.text()))
+            .collect();
+        if first || fresh.is_empty() || !self.cfg.notify {
+            return;
+        }
+        fresh.reverse(); // newest first
+        let n = fresh.len();
+        self.info(match n {
+            1 => "1 new notification".to_string(),
+            n => format!("{n} new notifications"),
+        });
+        let notes: Vec<(String, String)> = if n > 5 {
+            let mut body = fresh[..3].join("\n");
+            body.push_str("\n…");
+            vec![(format!("Taggr: {n} new notifications"), body)]
+        } else {
+            fresh
+                .into_iter()
+                .map(|b| ("Taggr".to_string(), b))
+                .collect()
+        };
+        // a bell marks the tmux window (monitor-bell)
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(b"\x07").and_then(|()| out.flush());
+        // D-Bus round trips stay off the UI thread
+        std::thread::spawn(move || {
+            for (summary, body) in notes {
+                let _ = notify_rust::Notification::new()
+                    .appname("taggr-tui")
+                    .icon("mail-unread")
+                    .summary(&summary)
+                    .body(&body)
+                    .show();
+            }
+        });
+    }
+
     fn sign_out(&mut self) {
+        self.known_notes = None;
         let _ = std::fs::remove_file(config::identity_file());
         let cfg = self.cfg.clone();
         let tx = self.tx.clone();

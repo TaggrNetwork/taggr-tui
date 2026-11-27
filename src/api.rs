@@ -147,6 +147,20 @@ pub enum Notification {
     WatchedPostEntries(PostId, Vec<PostId>),
 }
 
+impl Notification {
+    /// The message as Markdown, as the inbox shows it.
+    pub fn text(&self) -> String {
+        match self {
+            Notification::Generic(m)
+            | Notification::NewPost(m, _)
+            | Notification::Conditional(m, _) => m.clone(),
+            Notification::WatchedPostEntries(p, ids) => {
+                format!("{} new thread update(s) on watched post #{p}", ids.len())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct User {

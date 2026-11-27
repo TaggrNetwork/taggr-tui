@@ -25,6 +25,8 @@ pub struct Config {
     pub image_protocol: String,
     /// Where `s` saves pictures and other downloads.
     pub download_dir: PathBuf,
+    /// Desktop notifications for new inbox items while the TUI runs.
+    pub notify: bool,
     /// The gpg binary used to decrypt and encrypt PGP messages.
     pub gpg: String,
     /// Recipients prefilled when encrypting a draft (x in the send prompt).
@@ -43,6 +45,7 @@ impl Default for Config {
             image_protocol: "auto".into(),
             download_dir: dirs::download_dir()
                 .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Downloads")),
+            notify: true,
             gpg: "gpg".into(),
             pgp_recipients: vec![],
         }
