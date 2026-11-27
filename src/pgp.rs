@@ -84,10 +84,29 @@ struct Out {
     messages: Vec<String>,
 }
 
-fn run(gpg: &str, args: &[&str], input: &str) -> Result<Out, Error> {
-    let mut child = Command::new(gpg)
-        .args(["--batch", "--no-tty", "--status-fd", "2"])
-        .args(args)
+/// The terminal on our stdin, as `tty` names it (gpg's stdin is a pipe, so a terminal
+/// pinentry cannot find it without `GPG_TTY`).
+fn tty() -> Option<String> {
+    let out = Command::new("tty")
+        .stdin(Stdio::inherit())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && name.starts_with('/')).then_some(name)
+}
+
+fn run(gpg: &str, args: &[&str], input: &str, ask: bool) -> Result<Out, Error> {
+    let mut cmd = Command::new(gpg);
+    cmd.args(["--batch", "--no-tty", "--status-fd", "2"])
+        .args(args);
+    if ask
+        && std::env::var_os("GPG_TTY").is_none_or(|t| t.is_empty())
+        && let Some(t) = tty()
+    {
+        cmd.env("GPG_TTY", t);
+    }
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -125,7 +144,7 @@ pub fn decrypt(gpg: &str, armor: &str, ask: bool) -> Result<Decrypted, Error> {
     if !ask {
         args.extend(["--pinentry-mode", "error"]);
     }
-    let out = run(gpg, &args, armor)?;
+    let out = run(gpg, &args, armor, ask)?;
     let decrypted = out.status.iter().any(|s| s == "DECRYPTION_OKAY");
     if !out.ok && !decrypted {
         return Err(decrypt_error(&out, ask));
@@ -144,7 +163,9 @@ fn decrypt_error(out: &Out, ask: bool) -> Error {
     });
     match code {
         Some(85) if !ask => Error::NeedPassphrase,
-        Some(85) => Error::Other("no pinentry (set GPG_TTY or use a GUI pinentry)".into()),
+        Some(85) | Some(32870) => {
+            Error::Other("pinentry failed (set GPG_TTY or use a GUI pinentry)".into())
+        }
         Some(17) => Error::Other("no secret key for this message".into()),
         Some(11) => Error::Other("bad passphrase".into()),
         Some(99) => Error::Other("cancelled".into()),
@@ -187,7 +208,7 @@ pub fn encrypt(gpg: &str, text: &str, to: &[String]) -> Result<String, Error> {
     for r in to {
         args.extend(["--recipient", r.as_str()]);
     }
-    let out = run(gpg, &args, text)?;
+    let out = run(gpg, &args, text, false)?;
     if let Some(s) = out.status.iter().find(|s| s.starts_with("INV_RECP")) {
         let mut it = s.splitn(3, ' ').skip(1);
         let code = it.next().unwrap_or("");

@@ -118,8 +118,8 @@ PGP
   Posts with a -----BEGIN PGP MESSAGE----- block show it as one line; x
   decrypts it with your gpg (keyring, gpg-agent, pinentry) and shows the plain
   text and any signature in place. It is kept in memory only. When the agent
-  needs a passphrase, the screen is handed to pinentry (a terminal pinentry
-  needs GPG_TTY set, e.g. export GPG_TTY=$(tty)).
+  needs a passphrase, the screen is handed to pinentry (GPG_TTY is set to this
+  terminal when it is not set already).
 
   x in the send prompt encrypts the body to the recipients you enter
   (pgp_recipients prefills them); add your own key to read it later. Recipient

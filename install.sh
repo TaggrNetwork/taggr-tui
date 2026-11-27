@@ -7,7 +7,6 @@
 set -eu
 
 repo=TaggrNetwork/taggr-tui
-base="https://github.com/$repo/releases/latest/download"
 dir=${TAGGR_TUI_INSTALL_DIR:-"${HOME:-}/.local/bin"}
 
 die() {
@@ -59,6 +58,17 @@ else
 	die "sha256sum or shasum is required to check the download"
 fi
 
+# The latest release is resolved to its tag once, so the version reported is
+# the one downloaded even if a release lands meanwhile.
+latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest") ||
+	die "cannot find the latest release of $repo"
+tag=${latest##*/}
+case $tag in
+v[0-9]*) ;;
+*) die "unexpected latest release: $latest" ;;
+esac
+base="https://github.com/$repo/releases/download/$tag"
+
 tmp=$(mktemp -d) || die "mktemp failed"
 trap 'rm -rf "$tmp"' EXIT
 trap 'exit 1' INT TERM HUP
@@ -80,7 +90,7 @@ chmod 755 "$tmp/taggr-tui"
 
 mkdir -p "$dir" || die "cannot create $dir"
 install -m 755 "$tmp/taggr-tui" "$dir/taggr-tui" || die "cannot install to $dir"
-printf 'installed %s\n' "$dir/taggr-tui"
+printf 'installed taggr-tui %s to %s\n' "$tag" "$dir/taggr-tui"
 
 case ":$PATH:" in
 *":$dir:"*) ;;

@@ -211,9 +211,9 @@ pub fn send_key(app: &mut App, d: Draft, scroll: u16, k: KeyEvent) {
     }
 }
 
-/// Ask for recipients and encrypt the draft's body with gpg; Esc goes back to the prompt.
-fn encrypt_form(app: &mut App, d: Draft, scroll: u16) {
-    let why = if d.encrypted.is_some() {
+/// Why the draft can't be encrypted, if it can't.
+pub fn encrypt_blocker(d: &Draft) -> Option<&'static str> {
+    if d.encrypted.is_some() {
         Some("already encrypted; e: edit to start from the plain text")
     } else if d.poll.is_some() {
         Some("polls can't be encrypted: the options would stay public")
@@ -221,8 +221,12 @@ fn encrypt_form(app: &mut App, d: Draft, scroll: u16) {
         Some("pictures can't be encrypted: remove the local pictures first")
     } else {
         None
-    };
-    if let Some(why) = why {
+    }
+}
+
+/// Ask for recipients and encrypt the draft's body with gpg; Esc goes back to the prompt.
+fn encrypt_form(app: &mut App, d: Draft, scroll: u16) {
+    if let Some(why) = encrypt_blocker(&d) {
         app.error(why);
         app.popup = Some(Popup::Send(d, scroll));
         return;

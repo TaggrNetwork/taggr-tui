@@ -513,7 +513,16 @@ fn hints(app: &App) -> Vec<(String, String)> {
     if let Some(t) = page.and_then(|p| p.tab_row.as_ref()) {
         v.push(k(&format!("1-{} [ ]", t.1.len()), "tab"));
     }
-    v.extend([k("j k", "move"), k("Esc", "back"), k("?", "help")]);
+    if page.is_some_and(|p| {
+        p.entries
+            .iter()
+            .filter(|e| e.target.is_some())
+            .nth(1)
+            .is_some()
+    }) {
+        v.push(k("j k", "move"));
+    }
+    v.extend([k("Esc", "back"), k("?", "help")]);
     v
 }
 
@@ -542,6 +551,16 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             area,
         );
     }
+}
+
+/// A row of key hints: key, then what it does.
+fn key_line(keys: &[(&str, String)]) -> Line<'static> {
+    let mut spans = vec![];
+    for (k, d) in keys {
+        spans.push(Span::styled(k.to_string(), key_style()));
+        spans.push(Span::styled(format!(" {d}  "), dim()));
+    }
+    Line::from(spans)
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -668,18 +687,25 @@ fn draw_popup(f: &mut Frame, app: &mut App, area: Rect) {
             if let Some(e) = &form.error {
                 lines.extend(wrap_lines(e, iw, Style::default().fg(Color::Red)));
             }
-            lines.push(Line::from(vec![
-                Span::styled("Tab", key_style()),
-                Span::styled(" next  ", dim()),
-                Span::styled("Space", key_style()),
-                Span::styled(" toggle  ", dim()),
-                Span::styled("Enter", key_style()),
-                Span::styled(format!(" next/{}  ", form.submit), dim()),
-                Span::styled("^S", key_style()),
-                Span::styled(format!(" {}  ", form.submit), dim()),
-                Span::styled("Esc", key_style()),
-                Span::styled(" cancel", dim()),
-            ]));
+            // only the keys that do something on the selected field
+            let n = form.fields.len();
+            let kind = form.fields.get(form.sel).map(|f| &f.kind);
+            let mut keys = vec![];
+            if n > 1 {
+                keys.push(("Tab", "next".to_string()));
+            }
+            match kind {
+                Some(FieldKind::Bool) => keys.push(("Space", "toggle".into())),
+                Some(FieldKind::Choice(..)) => keys.push(("← →", "change".into())),
+                _ => {}
+            }
+            match kind {
+                Some(FieldKind::Long) => keys.push(("Enter", "edit".into())),
+                _ if form.sel + 1 < n => keys.push(("Enter", "next".into())),
+                _ => {}
+            }
+            keys.extend([("^S", form.submit.clone()), ("Esc", "cancel".into())]);
+            lines.push(key_line(&keys));
             let h = (lines.len() as u16 + 2).min(area.height - 2);
             let r = centered(area, w as u16, h);
             f.render_widget(Clear, r);
@@ -754,21 +780,15 @@ fn draw_popup(f: &mut Frame, app: &mut App, area: Rect) {
             f.render_widget(block, r);
             let [b, k] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
             f.render_widget(Paragraph::new(lines).scroll((s, 0)), b);
-            let keys = Line::from(vec![
-                Span::styled("y", key_style()),
-                Span::styled(" post  ", dim()),
-                Span::styled("e", key_style()),
-                Span::styled(" edit  ", dim()),
-                Span::styled("x", key_style()),
-                Span::styled(" encrypt  ", dim()),
-                Span::styled("Esc", key_style()),
-                Span::styled(" keep for later  ", dim()),
-                Span::styled("D", key_style()),
-                Span::styled(" discard  ", dim()),
-                Span::styled("j k", key_style()),
-                Span::styled(" scroll", dim()),
-            ]);
-            f.render_widget(Paragraph::new(keys), k);
+            let mut keys = vec![("y", "post".to_string()), ("e", "edit".into())];
+            if super::compose::encrypt_blocker(d).is_none() {
+                keys.push(("x", "encrypt".into()));
+            }
+            keys.extend([("Esc", "keep for later".into()), ("D", "discard".into())]);
+            if max > 0 {
+                keys.push(("j k", "scroll".into()));
+            }
+            f.render_widget(Paragraph::new(key_line(&keys)), k);
         }
         Popup::Text(title, lines, scroll) => {
             let w = (area.width - 4).min(84);
