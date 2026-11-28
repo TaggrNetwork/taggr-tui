@@ -215,11 +215,21 @@ fn draw_nav(f: &mut Frame, app: &mut App, area: Rect) {
             Nav::Header(t) => Line::styled(fit(t, w), dim().add_modifier(Modifier::BOLD)),
             Nav::Go(k, label) => {
                 let is_open = open.as_ref() == Some(k);
-                let mut st = if is_open { accent() } else { Style::default() };
-                if matches!(k, Kind::Inbox) && label.contains('(') {
-                    st = st.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                let st = if is_open { accent() } else { Style::default() };
+                let text = fit(&format!(" {ic}{label}"), w);
+                match text.find(" (") {
+                    Some(i) if matches!(k, Kind::Inbox) => {
+                        let (name, count) = text.split_at(i + 1);
+                        let orange = Style::default()
+                            .fg(Color::Indexed(208))
+                            .add_modifier(Modifier::BOLD);
+                        Line::from(vec![
+                            Span::styled(name.to_string(), st),
+                            Span::styled(count.to_string(), orange),
+                        ])
+                    }
+                    _ => Line::styled(text, st),
                 }
-                Line::styled(fit(&format!(" {ic}{label}"), w), st)
             }
             Nav::SignIn => Line::styled(
                 fit(&format!(" {ic}Sign in"), w),
