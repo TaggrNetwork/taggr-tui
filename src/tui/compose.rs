@@ -73,13 +73,10 @@ impl Draft {
         Draft::make(What::Poll, realm, t)
     }
 
-    /// A reply quoting the parent's body with `> `, as in email, then the mention.
+    /// A reply quoting the parent's body with `> `, as in email.
     /// `plain` is the decrypted text of the parent's encrypted block, if it was decrypted.
-    pub fn reply(parent: PostId, author: &str, body: &str, plain: Option<&str>) -> Draft {
-        let (mut t, plain_quote) = quote(body, plain);
-        if !author.is_empty() {
-            t.push_str(&format!("@{author} "));
-        }
+    pub fn reply(parent: PostId, body: &str, plain: Option<&str>) -> Draft {
+        let (t, plain_quote) = quote(body, plain);
         let mut d = Draft::make(What::Reply(parent), None, t);
         d.plain_quote = plain_quote;
         d
@@ -564,7 +561,7 @@ mod tests {
 
     #[test]
     fn replies_have_no_headers() {
-        let mut d = Draft::reply(1, "x", "", None);
+        let mut d = Draft::reply(1, "", None);
         d.parse("Realm: no header here").unwrap();
         assert_eq!(d.body, "Realm: no header here");
         d.discard();
@@ -572,8 +569,8 @@ mod tests {
 
     #[test]
     fn replies_quote_the_parent() {
-        let d = Draft::reply(1, "bob", "hi\n\n> earlier\n", None);
-        assert_eq!(d.template, "> hi\n>\n> > earlier\n\n@bob ");
+        let d = Draft::reply(1, "hi\n\n> earlier\n", None);
+        assert_eq!(d.template, "> hi\n>\n> > earlier\n\n");
         assert!(!d.plain_quote);
         d.discard();
         let pgp = "a\n-----BEGIN PGP MESSAGE-----\nx\n-----END PGP MESSAGE-----\nb";

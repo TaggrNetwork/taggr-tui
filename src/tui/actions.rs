@@ -422,12 +422,9 @@ impl App {
         if !self.need_user() {
             return;
         }
-        let (author, body) = self
-            .item(id)
-            .map(|i| (i.meta.author_name, i.post.body))
-            .unwrap_or_default();
+        let body = self.item(id).map(|i| i.post.body).unwrap_or_default();
         let plain = self.decrypted.get(&id).map(|d| d.text.as_str());
-        self.edit = Some(compose::Draft::reply(id, &author, &body, plain));
+        self.edit = Some(compose::Draft::reply(id, &body, plain));
     }
 
     pub fn new_post(&mut self, realm: Option<String>) {

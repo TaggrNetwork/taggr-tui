@@ -781,9 +781,9 @@ fn draw_popup(f: &mut Frame, app: &mut App, area: Rect) {
                     }
                 });
             }
-            let h = area.height - 2;
+            let h = (lines.len() as u16 + 3).min(area.height - 2);
             let r = centered(area, w, h);
-            let body_h = h.saturating_sub(4);
+            let body_h = h.saturating_sub(3);
             let max = (lines.len() as u16).saturating_sub(body_h);
             let s = (*scroll).min(max);
             f.render_widget(Clear, r);
